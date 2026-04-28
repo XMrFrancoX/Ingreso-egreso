@@ -1,0 +1,50 @@
+# ─── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+
+# ─── SvelteKit build outputs ──────────────────────────────────────────────────
+.svelte-kit/
+/build/
+.output/
+
+# ─── Deployment adapters ──────────────────────────────────────────────────────
+.vercel/
+.netlify/
+.wrangler/
+
+# ─── Environment variables (NEVER commit secrets) ─────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.test
+
+# ─── Supabase local dev ───────────────────────────────────────────────────────
+supabase/.branches/
+supabase/.temp/
+
+# ─── Vite ─────────────────────────────────────────────────────────────────────
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# ─── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Editor / IDE ─────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+*.tgz
+.cache/

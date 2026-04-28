@@ -1,0 +1,194 @@
+<script>
+	import { Html5Qrcode } from 'html5-qrcode';
+	import { onMount, onDestroy } from 'svelte';
+    import { supabase } from '$lib/supabaseClient';
+    import { goto } from '$app/navigation';
+	
+	let session = $state(null);
+	let loading = $state(true);
+	let pendingMovement = $state(null);
+	let signature = $state('');
+	
+	let qrVerified = $state(false);
+	let html5QrCode;
+	let cameraError = $state('');
+
+	onMount(async () => {
+        const { data } = await supabase.auth.getSession();
+        session = data.session;
+        if (!session) {
+            goto('/');
+            return;
+        }
+
+		await checkPendingMovement();
+		if (!qrVerified) {
+			setTimeout(startScanner, 500);
+		}
+	});
+
+	onDestroy(async () => {
+		if (html5QrCode && html5QrCode.isScanning) {
+			await html5QrCode.stop().catch(e => console.error(e));
+		}
+	});
+
+	async function startScanner() {
+		if (html5QrCode) return;
+        
+        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+            cameraError = '⚠️ Error de Seguridad: El acceso a la cámara requiere HTTPS. Verifica que la URL empiece con https://';
+            return;
+        }
+
+		html5QrCode = new Html5Qrcode("qr-reader");
+        
+        try {
+            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+            await html5QrCode.start(
+                { facingMode: "environment" }, 
+                config, 
+                onScanSuccess
+            );
+        } catch (err) {
+            console.error("No se pudo iniciar la cámara:", err);
+            cameraError = 'No se pudo acceder a la cámara. Asegúrate de dar permisos y usar HTTPS.';
+        }
+	}
+
+	async function onScanSuccess(decodedText) {
+		const activeToken = localStorage.getItem('active_qr_token') || 'PHILIPS-DEMO';
+		if (decodedText === activeToken || decodedText === 'PHILIPS-DEMO') {
+			qrVerified = true;
+			if (html5QrCode && html5QrCode.isScanning) {
+                await html5QrCode.stop().catch(e => console.error(e));
+            }
+		} else {
+			alert('Código QR Inválido. Asegúrate de escanear el código que el preceptor tiene en pantalla.');
+		}
+	}
+
+	function onScanFailure(error) {
+		// silent error
+	}
+
+	function simulateScan() {
+		const activeToken = localStorage.getItem('active_qr_token');
+		if (!activeToken) return alert('El preceptor aún no ha generado un código QR.');
+		onScanSuccess(activeToken);
+	}
+
+	async function checkPendingMovement() {
+		loading = true;
+		const today = new Date().toLocaleDateString('en-CA');
+		const movs = JSON.parse(localStorage.getItem('movimientos') || '[]');
+		pendingMovement = movs.find(m => m.alumno_email === session.user.email && m.fecha === today && !m.hora_ingreso) || null;
+		loading = false;
+	}
+
+	async function registrarSalida() {
+		if (!signature.trim()) return alert('Por favor, escribe tu nombre completo.');
+		
+		loading = true;
+		const ahora = new Date();
+		const hora_salida = ahora.toTimeString().split(' ')[0];
+		const fecha = ahora.toLocaleDateString('en-CA');
+
+		const movs = JSON.parse(localStorage.getItem('movimientos') || '[]');
+		movs.unshift({ 
+			id: Date.now().toString(),
+			alumno_email: session.user.email,
+			fecha,
+			hora_salida,
+			firma_salida: signature.trim(),
+			hora_ingreso: null,
+			firma_ingreso: null
+		});
+		localStorage.setItem('movimientos', JSON.stringify(movs));
+		
+		signature = '';
+		qrVerified = false;
+		await checkPendingMovement();
+		alert('Salida registrada con éxito.');
+        window.location.reload(); // Para reiniciar scanner si hace falta otra acción
+	}
+
+	async function registrarIngreso() {
+		if (!signature.trim()) return alert('Por favor, firma para confirmar tu vuelta.');
+		
+		loading = true;
+		const ahora = new Date();
+		const hora_ingreso = ahora.toTimeString().split(' ')[0];
+
+		const movs = JSON.parse(localStorage.getItem('movimientos') || '[]');
+		const index = movs.findIndex(m => m.id === pendingMovement.id);
+		if (index !== -1) {
+			movs[index].hora_ingreso = hora_ingreso;
+			movs[index].firma_ingreso = signature.trim();
+			localStorage.setItem('movimientos', JSON.stringify(movs));
+		}
+
+		signature = '';
+		pendingMovement = null;
+		qrVerified = false;
+		loading = false;
+		alert('Ingreso registrado correctamente.');
+        window.location.href = '/';
+	}
+</script>
+
+<div class="row justify-content-center">
+	<div class="col-md-8 col-lg-6 text-center">
+		<h2 class="fw-bold philips-text mb-4">Registro de Alumno</h2>
+
+		{#if loading}
+			<div class="spinner-border text-primary" role="status"></div>
+		{:else}
+			<div class="card glass-card shadow-sm p-4 text-center">
+				{#if !qrVerified}
+					<div class="alert alert-info border-0 shadow-sm mb-4">
+						<h6 class="fw-bold mb-1">Punto de Control</h6>
+						<p class="small mb-0">Escanea el QR del Preceptor para poder realizar el trámite.</p>
+					</div>
+
+					<div id="qr-reader" class="mb-3 overflow-hidden border border-primary rounded shadow-sm bg-black" style="min-height: 250px;">
+						{#if cameraError}
+							<div class="p-4 text-white d-flex flex-column align-items-center justify-content-center h-100">
+								<p class="mb-3 text-warning">{cameraError}</p>
+								<button class="btn btn-outline-light btn-sm" onclick={() => window.location.reload()}>REINTENTAR</button>
+							</div>
+						{/if}
+					</div>
+					
+                    <div class="card bg-light border-0 p-3 mb-3">
+                        <p class="small text-muted mb-2"><b>¿Sin cámara o sin HTTPS?</b><br>
+                        Si estás en un celular y no abre la cámara por seguridad (HTTPS), usa el botón de abajo para la demostración:</p>
+                        <button class="btn btn-primary fw-bold shadow-sm" onclick={simulateScan}>
+                            AUTO-VALIDAR QR (MODO DEMO)
+                        </button>
+                    </div>
+				{:else}
+					{#if pendingMovement}
+						<div class="bg-warning-subtle text-warning-emphasis p-3 rounded mb-4 border border-warning-subtle">
+							<h5 class="fw-bold mb-1">Actualmente: FUERA</h5>
+							<p class="mb-0 small text-muted">Salida registrada a las {pendingMovement.hora_salida}</p>
+						</div>
+
+						<h4 class="fw-semibold mb-3">Registrar Regreso</h4>
+						<input type="text" class="form-control form-control-lg text-center bg-light border-0 mb-3" bind:value={signature} placeholder="Tu firma aquí...">
+						<button class="btn btn-primary btn-lg w-100 fw-bold shadow-sm" onclick={registrarIngreso}>CONFIRMAR INGRESO</button>
+					{:else}
+						<div class="bg-success-subtle text-success-emphasis p-3 rounded mb-4 border border-success-subtle">
+							<h5 class="fw-bold mb-1">Estado: DENTRO</h5>
+							<p class="mb-0 small text-muted">Listo para registrar salida de almuerzo.</p>
+						</div>
+
+						<h4 class="fw-semibold mb-3">Registrar Salida</h4>
+						<input type="text" class="form-control form-control-lg text-center bg-light border-0 mb-3" bind:value={signature} placeholder="Tu firma aquí...">
+						<button class="btn btn-warning btn-lg w-100 fw-bold shadow-sm" onclick={registrarSalida}>REGISTRAR SALIDA</button>
+					{/if}
+				{/if}
+			</div>
+		{/if}
+	</div>
+</div>
