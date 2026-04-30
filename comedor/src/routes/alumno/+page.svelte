@@ -72,11 +72,7 @@
 		// silent error
 	}
 
-	function simulateScan() {
-		const activeToken = localStorage.getItem('active_qr_token');
-		if (!activeToken) return alert('El preceptor aún no ha generado un código QR.');
-		onScanSuccess(activeToken);
-	}
+
 
 	async function checkPendingMovement() {
 		loading = true;
@@ -160,13 +156,7 @@
 						{/if}
 					</div>
 					
-                    <div class="card bg-light border-0 p-3 mb-3">
-                        <p class="small text-muted mb-2"><b>¿Sin cámara o sin HTTPS?</b><br>
-                        Si estás en un celular y no abre la cámara por seguridad (HTTPS), usa el botón de abajo para la demostración:</p>
-                        <button class="btn btn-primary fw-bold shadow-sm" onclick={simulateScan}>
-                            AUTO-VALIDAR QR (MODO DEMO)
-                        </button>
-                    </div>
+
 				{:else}
 					{#if pendingMovement}
 						<div class="bg-warning-subtle text-warning-emphasis p-3 rounded mb-4 border border-warning-subtle">

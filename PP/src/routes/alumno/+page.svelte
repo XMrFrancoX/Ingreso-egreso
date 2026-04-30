@@ -1,5 +1,6 @@
 <script>
-	import { onMount } from 'svelte';
+	import { Html5Qrcode } from 'html5-qrcode';
+	import { onMount, onDestroy } from 'svelte';
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -12,6 +13,10 @@
 	let loading = $state(true);
 	let registrando = $state(false);
 	let errorMsg = $state('');
+
+	let qrVerified = $state(false);
+	let html5QrCode;
+	let cameraError = $state('');
 
 	const DIAS = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 
@@ -34,7 +39,52 @@
 		if (!session) { goto('/'); return; }
 
 		await cargarPerfil();
+		
+		if (!qrVerified && !registroHoy && empresa && hoyHabilitado) {
+			setTimeout(startScanner, 500);
+		}
 	});
+
+	onDestroy(async () => {
+		if (html5QrCode && html5QrCode.isScanning) {
+			await html5QrCode.stop().catch(e => console.error(e));
+		}
+	});
+
+	async function startScanner() {
+		if (html5QrCode) return;
+        
+        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+            cameraError = '⚠️ Error de Seguridad: El acceso a la cámara requiere HTTPS.';
+            return;
+        }
+
+		html5QrCode = new Html5Qrcode("qr-reader");
+        
+        try {
+            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+            await html5QrCode.start(
+                { facingMode: "environment" }, 
+                config, 
+                onScanSuccess
+            );
+        } catch (err) {
+            console.error("No se pudo iniciar la cámara:", err);
+            cameraError = 'No se pudo acceder a la cámara. Asegúrate de dar permisos y usar HTTPS.';
+        }
+	}
+
+	async function onScanSuccess(decodedText) {
+		const activeToken = localStorage.getItem('active_qr_token_pp') || 'PHILIPS-DEMO-PP';
+		if (decodedText === activeToken || decodedText === 'PHILIPS-DEMO-PP') {
+			qrVerified = true;
+			if (html5QrCode && html5QrCode.isScanning) {
+                await html5QrCode.stop().catch(e => console.error(e));
+            }
+		} else {
+			alert('Código QR Inválido. Asegúrate de escanear el código de pasantías.');
+		}
+	}
 
 	async function cargarPerfil() {
 		loading = true;
@@ -186,23 +236,39 @@
 					</div>
 
 				{:else}
-					<div class="bg-primary-subtle text-primary-emphasis rounded-3 p-3 border border-primary-subtle mb-4">
-						<p class="mb-0 small">
-							<strong>{DIAS[diaDeHoy()]}</strong> — Horario esperado: <strong>{fmtHora(perfil?.horario_entrada)}</strong>
-						</p>
-					</div>
-					<button
-						id="btn-registrar-entrada"
-						class="btn btn-primary btn-lg w-100 fw-bold shadow-sm"
-						onclick={registrarEntrada}
-						disabled={registrando}
-					>
-						{#if registrando}
-							<span class="spinner-border spinner-border-sm me-2"></span>Registrando...
-						{:else}
-							Registrar Entrada
-						{/if}
-					</button>
+					{#if !qrVerified}
+						<div class="alert alert-info border-0 shadow-sm mb-4">
+							<h6 class="fw-bold mb-1">Punto de Control</h6>
+							<p class="small mb-0">Escanea el QR del Preceptor para poder registrar tu entrada.</p>
+						</div>
+
+						<div id="qr-reader" class="mb-3 overflow-hidden border border-primary rounded shadow-sm bg-black" style="min-height: 250px;">
+							{#if cameraError}
+								<div class="p-4 text-white d-flex flex-column align-items-center justify-content-center h-100">
+									<p class="mb-3 text-warning">{cameraError}</p>
+									<button class="btn btn-outline-light btn-sm" onclick={() => window.location.reload()}>REINTENTAR</button>
+								</div>
+							{/if}
+						</div>
+					{:else}
+						<div class="bg-primary-subtle text-primary-emphasis rounded-3 p-3 border border-primary-subtle mb-4">
+							<p class="mb-0 small">
+								<strong>{DIAS[diaDeHoy()]}</strong> — Horario esperado: <strong>{fmtHora(perfil?.horario_entrada)}</strong>
+							</p>
+						</div>
+						<button
+							id="btn-registrar-entrada"
+							class="btn btn-primary btn-lg w-100 fw-bold shadow-sm"
+							onclick={registrarEntrada}
+							disabled={registrando}
+						>
+							{#if registrando}
+								<span class="spinner-border spinner-border-sm me-2"></span>Registrando...
+							{:else}
+								Registrar Entrada
+							{/if}
+						</button>
+					{/if}
 				{/if}
 			</div>
 

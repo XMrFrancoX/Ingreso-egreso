@@ -1,5 +1,6 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
+	import QRCode from 'qrcode';
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 
@@ -8,6 +9,10 @@
 	let saving = $state(null);
 	let errorMsg = $state('');
 	let loadingRegistros = $state(false);
+
+	let qrToken = $state('');
+	let qrDataURL = $state('');
+	let qrInterval;
 
 	const TODOS_DIAS = ['L', 'M', 'X', 'J', 'V'];
 	const DIAS_NOMBRE = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
@@ -24,8 +29,37 @@
 		if (!p || p.rol !== 'admin') { goto('/alumno'); return; }
 
 		await Promise.all([cargarAlumnos(), cargarEmpresas(), cargarRegistros()]);
+		
+		const existingToken = localStorage.getItem('active_qr_token_pp') || 'PHILIPS-DEMO-PP';
+		qrToken = existingToken;
+		generateQRCode(existingToken);
+		qrInterval = setInterval(createNewQR, 60000);
+		
 		loading = false;
 	});
+
+	onDestroy(() => {
+		if (qrInterval) clearInterval(qrInterval);
+	});
+
+	function createNewQR() {
+		const newToken = 'PHILIPS-PP-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+		qrToken = newToken;
+		localStorage.setItem('active_qr_token_pp', newToken);
+		generateQRCode(newToken);
+	}
+
+	async function generateQRCode(text) {
+		try {
+			qrDataURL = await QRCode.toDataURL(text, {
+				width: 300,
+				margin: 2,
+				color: { dark: '#0B5EAA', light: '#ffffff' }
+			});
+		} catch (err) {
+			console.error('Error generando QR:', err);
+		}
+	}
 
 	async function cargarAlumnos() {
 		const { data, error } = await supabase
@@ -111,9 +145,37 @@
 {:else}
 
 <div class="row align-items-center mb-4">
-	<div class="col">
+	<div class="col-md-6">
 		<h2 class="fw-bold philips-text mb-1">Panel Administrador</h2>
 		<p class="text-muted small mb-0">Gestión de alumnos en pasantía</p>
+	</div>
+	<div class="col-md-6 text-md-end mt-3 mt-md-0">
+		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
+			GENERAR QR DE INGRESO
+		</button>
+	</div>
+</div>
+
+<div class="modal fade" id="qrModal" tabindex="-1" aria-hidden="true">
+	<div class="modal-dialog modal-dialog-centered">
+		<div class="modal-content glass-card border-0">
+			<div class="modal-header border-0 pb-0">
+				<h5 class="modal-title fw-bold philips-text w-100 text-center">QR de Acceso Pasantías</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body text-center py-4">
+				<p class="text-muted small mb-3">Muestra este código a los alumnos para que validen su ingreso.</p>
+				{#if qrDataURL}
+					<img src={qrDataURL} alt="QR de Acceso" class="img-fluid shadow-sm border rounded mb-3" style="max-width: 250px;" />
+				{:else}
+					<div class="p-5 text-muted small">Generando código...</div>
+				{/if}
+				<div class="bg-light p-2 rounded fw-bold font-monospace">
+					{qrToken}
+				</div>
+                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Generar otro código</button>
+			</div>
+		</div>
 	</div>
 </div>
 

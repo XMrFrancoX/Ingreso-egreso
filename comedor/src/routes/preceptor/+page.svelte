@@ -7,6 +7,7 @@
     let session = $state(null);
 	let movimientos = $state([]);
 	let interval;
+	let qrInterval;
 	let qrToken = $state('');
 	let qrDataURL = $state('');
     let selectedDate = $state(new Date().toLocaleDateString('en-CA'));
@@ -25,6 +26,7 @@
 
 		await loadMovimientos();
 		interval = setInterval(loadMovimientos, 5000); // Polling cada 5 segundos
+		qrInterval = setInterval(createNewQR, 60000); // Actualizar QR cada 1 minuto
 		
 		const existingToken = localStorage.getItem('active_qr_token') || 'PHILIPS-DEMO';
 		qrToken = existingToken;
@@ -33,6 +35,7 @@
 
 	onDestroy(() => {
 		if (interval) clearInterval(interval);
+		if (qrInterval) clearInterval(qrInterval);
 	});
 
 	async function loadMovimientos() {
