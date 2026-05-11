@@ -36,7 +36,7 @@
 	onMount(async () => {
 		const { data } = await supabase.auth.getSession();
 		session = data.session;
-		if (!session) { goto('/'); return; }
+		if (!session) { goto('/PP'); return; }
 
 		await cargarPerfil();
 		
@@ -102,7 +102,7 @@
 			return;
 		}
 
-		if (p.rol !== 'student') { goto('/admin'); return; }
+		if (p.rol !== 'student') { goto('/PP/admin'); return; }
 
 		perfil = p;
 		empresa = p.empresa;

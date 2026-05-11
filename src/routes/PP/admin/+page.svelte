@@ -22,11 +22,11 @@
 	onMount(async () => {
 		const { data } = await supabase.auth.getSession();
 		session = data.session;
-		if (!session) { goto('/'); return; }
+		if (!session) { goto('/PP'); return; }
 
 		const { data: p } = await supabase
 			.from('perfiles').select('rol').eq('id', session.user.id).single();
-		if (!p || p.rol !== 'admin') { goto('/alumno'); return; }
+		if (!p || p.rol !== 'admin') { goto('/PP/alumno'); return; }
 
 		await Promise.all([cargarAlumnos(), cargarEmpresas(), cargarRegistros()]);
 		

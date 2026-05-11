@@ -17,7 +17,7 @@
         const { data } = await supabase.auth.getSession();
         session = data.session;
         if (!session) {
-            goto('/');
+            goto('/comedor');
             return;
         }
 
@@ -129,7 +129,7 @@
 		qrVerified = false;
 		loading = false;
 		alert('Ingreso registrado correctamente.');
-        window.location.href = '/';
+        window.location.href = '/comedor';
 	}
 </script>
 

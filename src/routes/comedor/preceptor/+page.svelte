@@ -20,7 +20,7 @@
         const { data } = await supabase.auth.getSession();
         session = data.session;
         if (!session) {
-            goto('/');
+            goto('/comedor');
             return;
         }
 
