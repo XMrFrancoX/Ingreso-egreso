@@ -9,10 +9,12 @@
 	let saving = $state(null);
 	let errorMsg = $state('');
 	let loadingRegistros = $state(false);
+	let isAdmin = $state(false);
 
 	let qrToken = $state('');
 	let qrDataURL = $state('');
-	let qrInterval;
+	let timeLeft = $state(60);
+	let timerInterval;
 
 	let nuevaEmpresa = $state('');
 	let addingEmpresa = $state(false);
@@ -33,27 +35,31 @@
 
 		const { data: p } = await supabase
 			.from('perfiles').select('rol').eq('id', session.user.id).single();
-		if (!p || p.rol !== 'admin') { goto('/PP/alumno'); return; }
+		if (!p || (p.rol !== 'admin' && p.rol !== 'preceptor')) { goto('/PP/alumno'); return; }
 
-		await Promise.all([cargarAlumnos(), cargarEmpresas(), cargarRegistros()]);
+		isAdmin = p.rol === 'admin';
+
+		await Promise.all([isAdmin ? cargarAlumnos() : Promise.resolve(), isAdmin ? cargarEmpresas() : Promise.resolve(), cargarRegistros()]);
 		
-		const existingToken = localStorage.getItem('active_qr_token_pp') || 'PHILIPS-DEMO-PP';
-		qrToken = existingToken;
-		generateQRCode(existingToken);
-		qrInterval = setInterval(createNewQR, 60000);
+		createNewQR();
+		timerInterval = setInterval(() => {
+			timeLeft--;
+			if (timeLeft <= 0) createNewQR();
+		}, 1000);
 		
 		loading = false;
 	});
 
 	onDestroy(() => {
-		if (qrInterval) clearInterval(qrInterval);
+		if (timerInterval) clearInterval(timerInterval);
 	});
 
 	function createNewQR() {
-		const newToken = 'PHILIPS-PP-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-		qrToken = newToken;
-		localStorage.setItem('active_qr_token_pp', newToken);
+		const payload = { app: 'PP', timestamp: Date.now() };
+		const newToken = JSON.stringify(payload);
+		qrToken = 'QR Dinámico Activo';
 		generateQRCode(newToken);
+		timeLeft = 60;
 	}
 
 	async function generateQRCode(text) {
@@ -154,7 +160,7 @@
 <div class="row align-items-center mb-4">
 	<div class="col-md-6">
 		<h2 class="fw-bold philips-text mb-1">Panel Administrador</h2>
-		<p class="text-muted small mb-0">Gestión de alumnos en pasantía</p>
+		<p class="text-muted small mb-0">{isAdmin ? 'Gestión de alumnos en pasantía' : 'Generación de acceso a pasantías'}</p>
 	</div>
 	<div class="col-md-6 text-md-end mt-3 mt-md-0">
 		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
@@ -177,10 +183,10 @@
 				{:else}
 					<div class="p-5 text-muted small">Generando código...</div>
 				{/if}
-				<div class="bg-light p-2 rounded fw-bold font-monospace">
-					{qrToken}
+				<div class="bg-light p-2 rounded fw-bold text-danger mb-3">
+					Expira en: {timeLeft} segundos
 				</div>
-                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Generar otro código</button>
+                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Forzar nuevo código</button>
 			</div>
 		</div>
 	</div>
@@ -191,6 +197,7 @@
 {/if}
 
 <!-- Empresas -->
+{#if isAdmin}
 <div class="card glass-card mb-4 p-4">
 	<h5 class="fw-bold mb-3">Empresas</h5>
 	<div class="d-flex flex-wrap gap-2 mb-3">
@@ -286,6 +293,7 @@
 		</div>
 	{/if}
 </div>
+{/if}
 
 <!-- Registros del día -->
 <div class="card glass-card overflow-hidden">

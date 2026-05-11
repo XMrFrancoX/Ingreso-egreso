@@ -11,6 +11,8 @@
 	let qrToken = $state('');
 	let qrDataURL = $state('');
     let selectedDate = $state(new Date().toLocaleDateString('en-CA'));
+	let timeLeft = $state(60);
+	let timerInterval;
 
 	let totalSalidas = $derived(movimientos.length);
 	let pendingReturns = $derived(movimientos.filter(m => !m.hora_ingreso).length);
@@ -26,16 +28,17 @@
 
 		await loadMovimientos();
 		interval = setInterval(loadMovimientos, 5000); // Polling cada 5 segundos
-		qrInterval = setInterval(createNewQR, 60000); // Actualizar QR cada 1 minuto
 		
-		const existingToken = localStorage.getItem('active_qr_token') || 'PHILIPS-DEMO';
-		qrToken = existingToken;
-		generateQRCode(existingToken);
+		createNewQR();
+		timerInterval = setInterval(() => {
+			timeLeft--;
+			if (timeLeft <= 0) createNewQR();
+		}, 1000);
 	});
 
 	onDestroy(() => {
 		if (interval) clearInterval(interval);
-		if (qrInterval) clearInterval(qrInterval);
+		if (timerInterval) clearInterval(timerInterval);
 	});
 
 	async function loadMovimientos() {
@@ -56,10 +59,11 @@
 	}
 
 	function createNewQR() {
-		const newToken = 'PHILIPS-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-		qrToken = newToken;
-		localStorage.setItem('active_qr_token', newToken);
+		const payload = { app: 'comedor', timestamp: Date.now() };
+		const newToken = JSON.stringify(payload);
+		qrToken = 'QR Dinámico Activo';
 		generateQRCode(newToken);
+		timeLeft = 60;
 	}
 
 	async function generateQRCode(text) {
@@ -106,12 +110,12 @@
 <div class="row mb-4 justify-content-center">
     <div class="col-md-4">
         <div class="card glass-card text-center p-3">
-            <p class="text-muted small mb-1">Código Activo</p>
-            <h5 class="fw-bold philips-text mb-2">{qrToken}</h5>
+            <p class="text-muted small mb-1">Estado del QR</p>
+            <h5 class="fw-bold philips-text mb-2">Expira en {timeLeft}s</h5>
             {#if qrDataURL}
                 <img src={qrDataURL} alt="QR" class="img-fluid mx-auto mb-2" style="max-width: 150px;" />
             {/if}
-            <p class="small text-muted mb-0">Usa este código para la demo</p>
+            <p class="small text-muted mb-0">Se actualiza automáticamente</p>
         </div>
     </div>
 </div>
@@ -130,10 +134,10 @@
 				{:else}
 					<div class="p-5 text-muted small">Generando código...</div>
 				{/if}
-				<div class="bg-light p-2 rounded fw-bold font-monospace">
-					{qrToken}
+				<div class="bg-light p-2 rounded fw-bold text-danger mb-3">
+					Expira en: {timeLeft} segundos
 				</div>
-                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Generar otro código</button>
+                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Forzar nuevo código</button>
 			</div>
 		</div>
 	</div>

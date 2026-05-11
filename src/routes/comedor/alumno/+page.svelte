@@ -57,14 +57,22 @@
 	}
 
 	async function onScanSuccess(decodedText) {
-		const activeToken = localStorage.getItem('active_qr_token') || 'PHILIPS-DEMO';
-		if (decodedText === activeToken || decodedText === 'PHILIPS-DEMO') {
-			qrVerified = true;
-			if (html5QrCode && html5QrCode.isScanning) {
-                await html5QrCode.stop().catch(e => console.error(e));
-            }
-		} else {
-			alert('Código QR Inválido. Asegúrate de escanear el código que el preceptor tiene en pantalla.');
+		try {
+			const data = JSON.parse(decodedText);
+			if (data.app === 'comedor') {
+				if (Date.now() - data.timestamp <= 60000) {
+					qrVerified = true;
+					if (html5QrCode && html5QrCode.isScanning) {
+						await html5QrCode.stop().catch(e => console.error(e));
+					}
+				} else {
+					alert('Código QR Expirado. Pídele al preceptor que genere uno nuevo.');
+				}
+			} else {
+				alert('Código QR Inválido. Asegúrate de escanear el código de comedor.');
+			}
+		} catch (e) {
+			alert('Código QR Inválido. Formato no reconocido.');
 		}
 	}
 
@@ -182,3 +190,9 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	:global(#qr-reader video) {
+		object-fit: cover !important;
+	}
+</style>

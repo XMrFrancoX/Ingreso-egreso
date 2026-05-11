@@ -28,7 +28,7 @@
 
 		if (data.rol === 'student') {
 			goto('/PP/alumno');
-		} else if (data.rol === 'admin') {
+		} else if (data.rol === 'admin' || data.rol === 'preceptor') {
 			goto('/PP/admin');
 		}
 	}
