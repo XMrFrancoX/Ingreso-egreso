@@ -14,6 +14,13 @@
 	let qrDataURL = $state('');
 	let qrInterval;
 
+	let nuevaEmpresa = $state('');
+	let addingEmpresa = $state(false);
+	let alumnos = $state([]);
+	let empresas = $state([]);
+	let registros = $state([]);
+	let selectedDate = $state(new Date().toLocaleDateString('en-CA'));
+
 	const TODOS_DIAS = ['L', 'M', 'X', 'J', 'V'];
 	const DIAS_NOMBRE = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 

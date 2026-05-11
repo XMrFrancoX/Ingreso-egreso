@@ -33,7 +33,7 @@
 		<div class="d-flex">
 			{#if session}
 				<span class="navbar-text me-3">{session.user.email}</span>
-				<button class="btn btn-outline-secondary btn-sm" on:click={signOut}>Cerrar Sesión</button>
+				<button class="btn btn-outline-secondary btn-sm" onclick={signOut}>Cerrar Sesión</button>
 			{/if}
 		</div>
 	</div>

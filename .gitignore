@@ -49,4 +49,10 @@ yarn-error.log*
 *.tgz
 .cache/
 # ─── Sql ─────────────────────────────────────────────────────────────────────
-.sql
+*.sqlite
+*.sqlite3
+*.db
+*.db3
+*.sql
+# Si quieres mantener supabase_schema.sql en el repositorio, descomenta la siguiente línea:
+# !supabase_schema.sql
