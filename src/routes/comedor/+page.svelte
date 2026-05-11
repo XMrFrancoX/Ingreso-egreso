@@ -27,9 +27,9 @@
         }
 
         if (data.rol === 'student') {
-            goto('/alumno');
+            goto('/comedor/alumno');
         } else if (data.rol === 'preceptor' || data.rol === 'admin') {
-            goto('/preceptor');
+            goto('/comedor/preceptor');
         }
     }
 
