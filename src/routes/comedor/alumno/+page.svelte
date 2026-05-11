@@ -85,8 +85,23 @@
 	async function checkPendingMovement() {
 		loading = true;
 		const today = new Date().toLocaleDateString('en-CA');
-		const movs = JSON.parse(localStorage.getItem('movimientos') || '[]');
-		pendingMovement = movs.find(m => m.alumno_email === session.user.email && m.fecha === today && !m.hora_ingreso) || null;
+		
+		const { data, error } = await supabase
+			.from('movimientos')
+			.select('*')
+			.eq('perfil_id', session.user.id)
+			.eq('fecha', today)
+			.is('hora_ingreso', null)
+			.order('hora_salida', { ascending: false })
+			.limit(1)
+			.single();
+			
+		if (!error && data) {
+			pendingMovement = data;
+		} else {
+			pendingMovement = null;
+		}
+		
 		loading = false;
 	}
 
@@ -98,23 +113,26 @@
 		const hora_salida = ahora.toTimeString().split(' ')[0];
 		const fecha = ahora.toLocaleDateString('en-CA');
 
-		const movs = JSON.parse(localStorage.getItem('movimientos') || '[]');
-		movs.unshift({ 
-			id: Date.now().toString(),
-			alumno_email: session.user.email,
+		const { error } = await supabase.from('movimientos').insert({
+			perfil_id: session.user.id,
 			fecha,
 			hora_salida,
 			firma_salida: signature.trim(),
 			hora_ingreso: null,
 			firma_ingreso: null
 		});
-		localStorage.setItem('movimientos', JSON.stringify(movs));
+		
+		if (error) {
+			alert('Error al registrar salida: ' + error.message);
+			loading = false;
+			return;
+		}
 		
 		signature = '';
 		qrVerified = false;
 		await checkPendingMovement();
 		alert('Salida registrada con éxito.');
-        window.location.reload(); // Para reiniciar scanner si hace falta otra acción
+        window.location.reload(); 
 	}
 
 	async function registrarIngreso() {
@@ -124,12 +142,18 @@
 		const ahora = new Date();
 		const hora_ingreso = ahora.toTimeString().split(' ')[0];
 
-		const movs = JSON.parse(localStorage.getItem('movimientos') || '[]');
-		const index = movs.findIndex(m => m.id === pendingMovement.id);
-		if (index !== -1) {
-			movs[index].hora_ingreso = hora_ingreso;
-			movs[index].firma_ingreso = signature.trim();
-			localStorage.setItem('movimientos', JSON.stringify(movs));
+		const { error } = await supabase
+			.from('movimientos')
+			.update({
+				hora_ingreso: hora_ingreso,
+				firma_ingreso: signature.trim()
+			})
+			.eq('id', pendingMovement.id);
+
+		if (error) {
+			alert('Error al registrar ingreso: ' + error.message);
+			loading = false;
+			return;
 		}
 
 		signature = '';
