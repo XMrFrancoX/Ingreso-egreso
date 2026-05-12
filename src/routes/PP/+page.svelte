@@ -21,15 +21,17 @@
 				await new Promise((r) => setTimeout(r, 1000));
 				return checkRoleAndRedirect(userSession, retries - 1);
 			}
-			console.error("Error obteniendo rol:", error);
-			loading = false;
+			// Sin perfil tras todos los reintentos → ir a alumno igual
+			// (la lógica de precarga en /PP/alumno crea el perfil)
+			goto("/PP/alumno");
 			return;
 		}
 
-		if (data.rol === "student") {
-			goto("/PP/alumno");
-		} else if (data.rol === "admin") {
+		if (data.rol === "admin" || data.rol === "preceptor") {
 			goto("/PP/admin");
+		} else {
+			// 'student', null, o cualquier otro rol → siempre a alumno
+			goto("/PP/alumno");
 		}
 	}
 
@@ -74,6 +76,7 @@
 		const { error } = await supabase.auth.signInWithOAuth({
 			provider: "google",
 			options: {
+				redirectTo: window.location.origin + "/PP",
 				queryParams: {
 					hd: "philips.edu.ar",
 					prompt: "select_account",
