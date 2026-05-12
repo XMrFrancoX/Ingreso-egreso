@@ -105,6 +105,41 @@
 			.single();
 
 		if (pe || !p) {
+			// Perfil no existe → buscar en precarga por email
+			const userEmail = session.user.email;
+			const { data: precarga } = await supabase
+				.from('alumnos_precargados')
+				.select(`id, email, empresa_id, horario_entrada, alumnos_precargados_dias ( dia )`)
+				.eq('email', userEmail)
+				.maybeSingle();
+
+			if (precarga) {
+				// Migrar la precarga a perfiles
+				const { error: insertErr } = await supabase
+					.from('perfiles')
+					.insert({
+						id: session.user.id,
+						email: userEmail,
+						rol: 'student',
+						empresa_id: precarga.empresa_id ?? null,
+						horario_entrada: precarga.horario_entrada ?? null
+					});
+
+				if (!insertErr) {
+					// Migrar días habilitados
+					const dias = precarga.alumnos_precargados_dias ?? [];
+					if (dias.length > 0) {
+						const rows = dias.map(d => ({ perfil_id: session.user.id, dia: d.dia }));
+						await supabase.from('dias_habilitados').insert(rows);
+					}
+					// Eliminar de precargados (ya no es necesario)
+					await supabase.from('alumnos_precargados').delete().eq('id', precarga.id);
+					// Volver a cargar el perfil ya creado
+					await cargarPerfil();
+					return;
+				}
+			}
+
 			errorMsg = 'No se encontró tu perfil. Contactá al administrador.';
 			loading = false;
 			return;

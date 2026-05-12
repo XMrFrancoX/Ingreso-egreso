@@ -8,6 +8,7 @@
 	let loading = $state(true);
 	let saving = $state(null);
 	let errorMsg = $state('');
+	let successMsg = $state('');
 	let loadingRegistros = $state(false);
 	let isAdmin = $state(false);
 
@@ -23,10 +24,26 @@
 	let registros = $state([]);
 	let selectedDate = $state(new Date().toLocaleDateString('en-CA'));
 
+	// Precarga
+	let precargaEmail = $state('');
+	let precargaEmpresaId = $state('');
+	let precargaHorario = $state('');
+	let precargaDias = $state([]);
+	let addingPrecarga = $state(false);
+	let precargados = $state([]);
+
+	// Confirmación eliminación
+	let confirmDelete = $state(null); // { tipo: 'empresa'|'alumno'|'precarga', id, nombre }
+
 	const TODOS_DIAS = ['L', 'M', 'X', 'J', 'V'];
 	const DIAS_NOMBRE = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 
 	function fmtHora(t) { return t ? t.substring(0, 5) : '—'; }
+
+	function showSuccess(msg) {
+		successMsg = msg;
+		setTimeout(() => { successMsg = ''; }, 3000);
+	}
 
 	onMount(async () => {
 		const { data } = await supabase.auth.getSession();
@@ -39,14 +56,19 @@
 
 		isAdmin = p.rol === 'admin';
 
-		await Promise.all([isAdmin ? cargarAlumnos() : Promise.resolve(), isAdmin ? cargarEmpresas() : Promise.resolve(), cargarRegistros()]);
-		
+		await Promise.all([
+			isAdmin ? cargarAlumnos() : Promise.resolve(),
+			isAdmin ? cargarEmpresas() : Promise.resolve(),
+			isAdmin ? cargarPrecargados() : Promise.resolve(),
+			cargarRegistros()
+		]);
+
 		createNewQR();
 		timerInterval = setInterval(() => {
 			timeLeft--;
 			if (timeLeft <= 0) createNewQR();
 		}, 1000);
-		
+
 		loading = false;
 	});
 
@@ -94,6 +116,18 @@
 		empresas = data ?? [];
 	}
 
+	async function cargarPrecargados() {
+		const { data } = await supabase
+			.from('alumnos_precargados')
+			.select(`id, email, horario_entrada, empresa:empresa_id ( id, nombre ), alumnos_precargados_dias ( dia )`)
+			.order('email');
+		precargados = (data ?? []).map(p => ({
+			...p,
+			empresa_nombre: p.empresa?.nombre ?? '—',
+			dias: p.alumnos_precargados_dias?.map(d => d.dia) ?? []
+		}));
+	}
+
 	async function cargarRegistros() {
 		loadingRegistros = true;
 		const { data, error } = await supabase
@@ -123,6 +157,7 @@
 			if (de) { errorMsg = 'Error guardando días: ' + de.message; saving = null; return; }
 		}
 		saving = null;
+		showSuccess('✓ Alumno guardado correctamente');
 	}
 
 	function toggleDia(alumno, dia) {
@@ -133,14 +168,129 @@
 		}
 	}
 
+	function togglePrecargaDia(dia) {
+		if (precargaDias.includes(dia)) {
+			precargaDias = precargaDias.filter(d => d !== dia);
+		} else {
+			precargaDias = [...precargaDias, dia];
+		}
+	}
+
 	async function agregarEmpresa() {
 		if (!nuevaEmpresa.trim()) return;
 		addingEmpresa = true;
 
 		const { error } = await supabase.from('empresas').insert({ nombre: nuevaEmpresa.trim() });
 		if (error) { errorMsg = 'Error al agregar empresa: ' + error.message; }
-		else { nuevaEmpresa = ''; await cargarEmpresas(); }
+		else { nuevaEmpresa = ''; await cargarEmpresas(); showSuccess('✓ Empresa agregada'); }
 		addingEmpresa = false;
+	}
+
+	async function eliminarEmpresa(emp) {
+		// Verificar si tiene alumnos asignados
+		const { count } = await supabase
+			.from('perfiles')
+			.select('id', { count: 'exact', head: true })
+			.eq('empresa_id', emp.id);
+
+		if (count > 0) {
+			confirmDelete = {
+				tipo: 'empresa',
+				id: emp.id,
+				nombre: emp.nombre,
+				advertencia: `Esta empresa tiene ${count} alumno(s) asignado(s). Al eliminarla quedarán sin empresa.`
+			};
+		} else {
+			confirmDelete = { tipo: 'empresa', id: emp.id, nombre: emp.nombre, advertencia: null };
+		}
+	}
+
+	async function eliminarAlumno(alumno) {
+		confirmDelete = {
+			tipo: 'alumno',
+			id: alumno.id,
+			nombre: alumno.email,
+			advertencia: 'Se eliminarán sus días habilitados y datos del sistema. No podrá ingresar hasta que el admin lo vuelva a cargar.'
+		};
+	}
+
+	async function eliminarPrecarga(p) {
+		confirmDelete = {
+			tipo: 'precarga',
+			id: p.id,
+			nombre: p.email,
+			advertencia: null
+		};
+	}
+
+	async function confirmarEliminacion() {
+		if (!confirmDelete) return;
+		errorMsg = '';
+
+		if (confirmDelete.tipo === 'empresa') {
+			const { error } = await supabase.from('empresas').delete().eq('id', confirmDelete.id);
+			if (error) { errorMsg = 'Error al eliminar empresa: ' + error.message; }
+			else { await cargarEmpresas(); await cargarAlumnos(); showSuccess('✓ Empresa eliminada'); }
+		}
+
+		if (confirmDelete.tipo === 'alumno') {
+			await supabase.from('dias_habilitados').delete().eq('perfil_id', confirmDelete.id);
+			const { error } = await supabase.from('perfiles').delete().eq('id', confirmDelete.id);
+			if (error) { errorMsg = 'Error al eliminar alumno: ' + error.message; }
+			else { await cargarAlumnos(); showSuccess('✓ Alumno eliminado'); }
+		}
+
+		if (confirmDelete.tipo === 'precarga') {
+			const { error } = await supabase.from('alumnos_precargados').delete().eq('id', confirmDelete.id);
+			if (error) { errorMsg = 'Error al eliminar precarga: ' + error.message; }
+			else { await cargarPrecargados(); showSuccess('✓ Precarga eliminada'); }
+		}
+
+		confirmDelete = null;
+	}
+
+	async function agregarPrecarga() {
+		if (!precargaEmail.trim()) { errorMsg = 'Ingresá un email válido.'; return; }
+		addingPrecarga = true;
+		errorMsg = '';
+
+		const email = precargaEmail.trim().toLowerCase();
+
+		// Verificar que no esté ya en perfiles (ya se logueo antes)
+		const { data: existe } = await supabase
+			.from('perfiles').select('id').eq('email', email).maybeSingle();
+		if (existe) {
+			errorMsg = 'Este email ya tiene un perfil activo. Buscalo en la tabla de Alumnos.';
+			addingPrecarga = false;
+			return;
+		}
+
+		const { data: precarga, error: pe } = await supabase
+			.from('alumnos_precargados')
+			.insert({
+				email,
+				empresa_id: precargaEmpresaId || null,
+				horario_entrada: precargaHorario || null
+			})
+			.select()
+			.single();
+
+		if (pe) { errorMsg = 'Error al precargar: ' + pe.message; addingPrecarga = false; return; }
+
+		if (precargaDias.length > 0) {
+			const rows = precargaDias.map(d => ({ precargado_id: precarga.id, dia: d }));
+			await supabase.from('alumnos_precargados_dias').insert(rows);
+		}
+
+		// Resetear formulario
+		precargaEmail = '';
+		precargaEmpresaId = '';
+		precargaHorario = '';
+		precargaDias = [];
+
+		await cargarPrecargados();
+		showSuccess('✓ Email precargado correctamente');
+		addingPrecarga = false;
 	}
 </script>
 
@@ -164,11 +314,12 @@
 	</div>
 	<div class="col-md-6 text-md-end mt-3 mt-md-0">
 		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
-			GENERAR QR DE INGRESO
+		GENERAR QR DE INGRESO
 		</button>
 	</div>
 </div>
 
+<!-- Modal QR -->
 <div class="modal fade" id="qrModal" tabindex="-1" aria-hidden="true">
 	<div class="modal-dialog modal-dialog-centered">
 		<div class="modal-content glass-card border-0">
@@ -192,17 +343,54 @@
 	</div>
 </div>
 
+<!-- Modal Confirmación Eliminación -->
+{#if confirmDelete}
+<div class="modal fade show d-block" tabindex="-1" style="background:rgba(0,0,0,.5);">
+	<div class="modal-dialog modal-dialog-centered">
+		<div class="modal-content border-0 shadow-lg">
+			<div class="modal-header border-0 pb-0">
+				<h5 class="modal-title fw-bold text-danger">Confirmar eliminación</h5>
+			</div>
+			<div class="modal-body">
+				<p>¿Eliminás <strong>{confirmDelete.nombre}</strong>?</p>
+				{#if confirmDelete.advertencia}
+					<div class="alert alert-warning border-0 small">{confirmDelete.advertencia}</div>
+				{/if}
+			</div>
+			<div class="modal-footer border-0 pt-0">
+				<button class="btn btn-outline-secondary btn-sm" onclick={() => confirmDelete = null}>Cancelar</button>
+				<button class="btn btn-danger btn-sm fw-bold" onclick={confirmarEliminacion}>Sí, eliminar</button>
+			</div>
+		</div>
+	</div>
+</div>
+{/if}
+
 {#if errorMsg}
 	<div class="alert alert-danger border-0 rounded-3 mb-4">{errorMsg}</div>
 {/if}
+{#if successMsg}
+	<div class="alert alert-success border-0 rounded-3 mb-4">{successMsg}</div>
+{/if}
+
+<!-- ── SECCIÓN ADMIN ── -->
+{#if isAdmin}
 
 <!-- Empresas -->
-{#if isAdmin}
 <div class="card glass-card mb-4 p-4">
 	<h5 class="fw-bold mb-3">Empresas</h5>
 	<div class="d-flex flex-wrap gap-2 mb-3">
-		{#each empresas as emp}
-			<span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-2">{emp.nombre}</span>
+		{#each empresas as emp (emp.id)}
+			<span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-2 d-flex align-items-center gap-2">
+				{emp.nombre}
+				<button
+					class="btn-close btn-close-sm ms-1"
+					style="font-size:.6rem; filter:invert(28%) sepia(90%) saturate(800%) hue-rotate(200deg);"
+					title="Eliminar empresa"
+					onclick={() => eliminarEmpresa(emp)}
+					aria-label="Eliminar {emp.nombre}"
+				></button>
+			</span>
 		{/each}
 		{#if empresas.length === 0}
 			<span class="text-muted small fst-italic">Sin empresas cargadas.</span>
@@ -223,11 +411,107 @@
 	</div>
 </div>
 
-<!-- Alumnos -->
+<!-- Precarga de Alumnos -->
 <div class="card glass-card mb-4 overflow-hidden">
 	<div class="p-4 border-bottom">
-		<h5 class="fw-bold mb-0">Alumnos</h5>
-		<p class="text-muted small mb-0">Asigná empresa, horario y días a cada alumno.</p>
+		<h5 class="fw-bold mb-0">Precarga de Alumnos</h5>
+		<p class="text-muted small mb-0">Cargá el email de Google de un alumno antes de que inicie sesión. Al hacer login, verá todo configurado.</p>
+	</div>
+
+	<!-- Formulario de precarga -->
+	<div class="p-4 border-bottom bg-light bg-opacity-50">
+		<div class="row g-3 align-items-end">
+			<div class="col-md-4">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Email de Google</label>
+				<input
+					id="input-precarga-email"
+					type="email"
+					class="form-control form-control-sm"
+					placeholder="alumno@gmail.com"
+					bind:value={precargaEmail}
+				/>
+			</div>
+			<div class="col-md-3">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Empresa</label>
+				<select class="form-select form-select-sm" bind:value={precargaEmpresaId}>
+					<option value="">Sin asignar</option>
+					{#each empresas as emp}
+						<option value={emp.id}>{emp.nombre}</option>
+					{/each}
+				</select>
+			</div>
+			<div class="col-md-2">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Horario entrada</label>
+				<input type="time" class="form-control form-control-sm" bind:value={precargaHorario} />
+			</div>
+			<div class="col-md-2">
+				<label class="form-label small fw-semibold text-muted text-uppercase d-block" style="font-size:.75rem;">Días</label>
+				<div class="d-flex gap-1">
+					{#each TODOS_DIAS as dia}
+						<button
+							class="btn btn-sm px-2 py-1 rounded-2 fw-semibold {precargaDias.includes(dia) ? 'btn-primary' : 'btn-outline-secondary'}"
+							onclick={() => togglePrecargaDia(dia)}
+							title={DIAS_NOMBRE[dia]}
+							style="min-width:30px; font-size:.78rem;"
+						>{dia}</button>
+					{/each}
+				</div>
+			</div>
+			<div class="col-md-1 d-flex align-items-end">
+				<button class="btn btn-success btn-sm w-100 fw-semibold" onclick={agregarPrecarga} disabled={addingPrecarga}>
+					{#if addingPrecarga}<span class="spinner-border spinner-border-sm"></span>{:else}+ Agregar{/if}
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Lista de precargados -->
+	{#if precargados.length === 0}
+		<div class="p-4 text-center text-muted small fst-italic">No hay emails precargados.</div>
+	{:else}
+		<div class="table-responsive">
+			<table class="table table-hover mb-0 align-middle">
+				<thead class="table-light text-muted small text-uppercase">
+					<tr>
+						<th class="ps-4">Email</th>
+						<th>Empresa</th>
+						<th>Horario</th>
+						<th>Días</th>
+						<th class="pe-4">Acción</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each precargados as p (p.id)}
+						<tr>
+							<td class="ps-4">
+								<span class="fw-medium text-dark small">{p.email}</span>
+								<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-2" style="font-size:.7rem;">En espera</span>
+							</td>
+							<td class="small text-muted">{p.empresa_nombre}</td>
+							<td><span class="badge bg-light text-dark border">{fmtHora(p.horario_entrada)}</span></td>
+							<td>
+								<div class="d-flex gap-1">
+									{#each TODOS_DIAS as dia}
+										<span class="badge rounded-pill px-2 {p.dias.includes(dia) ? 'bg-primary' : 'bg-light text-muted border'}" style="font-size:.75rem;">{dia}</span>
+									{/each}
+								</div>
+							</td>
+							<td class="pe-4">
+								<button class="btn btn-sm btn-outline-danger px-2" onclick={() => eliminarPrecarga(p)} title="Eliminar precarga">🗑</button>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
+</div>
+
+<!-- Alumnos registrados -->
+<div class="card glass-card mb-4 overflow-hidden">
+	<div class="p-4 border-bottom">
+		<h5 class="fw-bold mb-0">Alumnos Registrados</h5>
+		<p class="text-muted small mb-0">Alumnos que ya iniciaron sesión. Asigná empresa, horario y días.</p>
 	</div>
 
 	{#if alumnos.length === 0}
@@ -241,7 +525,7 @@
 						<th>Empresa</th>
 						<th>Horario entrada</th>
 						<th>Días habilitados</th>
-						<th class="pe-4">Acción</th>
+						<th class="pe-4">Acciones</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -274,17 +558,24 @@
 								</div>
 							</td>
 							<td class="pe-4">
-								<button
-									class="btn btn-sm btn-success fw-semibold px-3"
-									onclick={() => guardarAlumno(alumno)}
-									disabled={saving === alumno.id}
-								>
-									{#if saving === alumno.id}
-										<span class="spinner-border spinner-border-sm"></span>
-									{:else}
-										Guardar
-									{/if}
-								</button>
+								<div class="d-flex gap-2">
+									<button
+										class="btn btn-sm btn-success fw-semibold px-3"
+										onclick={() => guardarAlumno(alumno)}
+										disabled={saving === alumno.id}
+									>
+										{#if saving === alumno.id}
+											<span class="spinner-border spinner-border-sm"></span>
+										{:else}
+											Guardar
+										{/if}
+									</button>
+									<button
+										class="btn btn-sm btn-outline-danger px-2"
+										onclick={() => eliminarAlumno(alumno)}
+										title="Eliminar alumno"
+									>🗑</button>
+								</div>
 							</td>
 						</tr>
 					{/each}
