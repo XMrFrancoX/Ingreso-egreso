@@ -98,23 +98,29 @@
 		loading = true;
 		errorMsg = '';
 
+		const userEmail = session.user.email;
+
+		// SIEMPRE buscar precarga primero, sin importar si el perfil ya existe
+		// (Supabase puede crear el perfil automáticamente via trigger al hacer login)
+		const { data: precarga } = await supabase
+			.from('alumnos_precargados')
+			.select(`id, email, empresa_id, horario_entrada, alumnos_precargados_dias ( dia )`)
+			.eq('email', userEmail)
+			.maybeSingle();
+
 		const { data: p, error: pe } = await supabase
 			.from('perfiles')
 			.select(`id, email, rol, horario_entrada, empresa:empresa_id ( id, nombre )`)
 			.eq('id', session.user.id)
 			.single();
 
-		if (pe || !p) {
-			// Perfil no existe → buscar en precarga por email
-			const userEmail = session.user.email;
-			const { data: precarga } = await supabase
-				.from('alumnos_precargados')
-				.select(`id, email, empresa_id, horario_entrada, alumnos_precargados_dias ( dia )`)
-				.eq('email', userEmail)
-				.maybeSingle();
+		if (precarga) {
+			// Hay precarga → aplicar los datos al perfil (ya sea creándolo o actualizándolo)
+			const dias = precarga.alumnos_precargados_dias ?? [];
+			const rows = dias.map(d => ({ perfil_id: session.user.id, dia: d.dia }));
 
-			if (precarga) {
-				// Migrar la precarga a perfiles
+			if (pe || !p) {
+				// El perfil no existe aún → crear con los datos precargados
 				const { error: insertErr } = await supabase
 					.from('perfiles')
 					.insert({
@@ -124,22 +130,40 @@
 						empresa_id: precarga.empresa_id ?? null,
 						horario_entrada: precarga.horario_entrada ?? null
 					});
-
-				if (!insertErr) {
-					// Migrar días habilitados
-					const dias = precarga.alumnos_precargados_dias ?? [];
-					if (dias.length > 0) {
-						const rows = dias.map(d => ({ perfil_id: session.user.id, dia: d.dia }));
-						await supabase.from('dias_habilitados').insert(rows);
-					}
-					// Eliminar de precargados (ya no es necesario)
-					await supabase.from('alumnos_precargados').delete().eq('id', precarga.id);
-					// Volver a cargar el perfil ya creado
-					await cargarPerfil();
+				if (insertErr) {
+					console.error('Error creando perfil desde precarga:', insertErr);
+					errorMsg = 'Error al configurar tu perfil. Contactá al administrador.';
+					loading = false;
 					return;
 				}
+			} else {
+				// El perfil ya existe (trigger automático) → actualizarlo con los datos precargados
+				await supabase
+					.from('perfiles')
+					.update({
+						empresa_id: precarga.empresa_id ?? null,
+						horario_entrada: precarga.horario_entrada ?? null,
+						rol: 'student'
+					})
+					.eq('id', session.user.id);
 			}
 
+			// Insertar días habilitados
+			if (rows.length > 0) {
+				await supabase.from('dias_habilitados').delete().eq('perfil_id', session.user.id);
+				await supabase.from('dias_habilitados').insert(rows);
+			}
+
+			// Eliminar la precarga (ya fue aplicada)
+			await supabase.from('alumnos_precargados').delete().eq('id', precarga.id);
+
+			// Recargar el perfil ya actualizado
+			await cargarPerfil();
+			return;
+		}
+
+		// Sin precarga → cargar perfil normal
+		if (pe || !p) {
 			errorMsg = 'No se encontró tu perfil. Contactá al administrador.';
 			loading = false;
 			return;
@@ -150,11 +174,11 @@
 		perfil = p;
 		empresa = p.empresa;
 
-		const { data: dias } = await supabase
+		const { data: diasDB } = await supabase
 			.from('dias_habilitados')
 			.select('dia')
 			.eq('perfil_id', p.id);
-		diasHabilitados = dias?.map(d => d.dia) ?? [];
+		diasHabilitados = diasDB?.map(d => d.dia) ?? [];
 
 		const { data: reg } = await supabase
 			.from('registros')
