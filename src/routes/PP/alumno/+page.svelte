@@ -133,27 +133,35 @@
 			if (upsertErr) {
 				console.error('Error aplicando precarga:', upsertErr);
 				// Si el upsert falla, intentar solo UPDATE (por si RLS bloquea INSERT)
-				const { error: updateErr } = await supabase
+				const { data: updateData, error: updateErr } = await supabase
 					.from('perfiles')
 					.update({
 						empresa_id: precarga.empresa_id ?? null,
 						horario_entrada: precarga.horario_entrada ?? null,
 						rol: 'student'
 					})
-					.eq('id', session.user.id);
+					.eq('id', session.user.id)
+					.select(); // <--- IMPORTANTE: pedimos que devuelva la fila actualizada
 
-				if (updateErr) {
-					console.error('Error en fallback UPDATE:', updateErr);
-					errorMsg = 'Error al configurar tu perfil. Contactá al administrador.';
+				// Si hubo error, o si el update afectó a 0 filas (el perfil no existe)
+				if (updateErr || !updateData || updateData.length === 0) {
+					console.error('Fallo el Update. El perfil no existe o RLS lo bloquea.');
+					errorMsg = 'Tu cuenta aún no está vinculada correctamente en la base de datos. Mostrale este error al administrador (Falta ejecutar SQL de RLS/Perfiles).';
 					loading = false;
-					return;
+					return; // <--- Aborta sin borrar la precarga
 				}
 			}
 
 			// Insertar días habilitados
 			if (rows.length > 0) {
-				await supabase.from('dias_habilitados').delete().eq('perfil_id', session.user.id);
-				await supabase.from('dias_habilitados').insert(rows);
+				const { error: delErr } = await supabase.from('dias_habilitados').delete().eq('perfil_id', session.user.id);
+				if (delErr) console.error('Error borrando días previos:', delErr);
+				
+				const { error: insErr } = await supabase.from('dias_habilitados').insert(rows);
+				if (insErr) {
+					console.error('Error insertando días habilitados:', insErr);
+					errorMsg = 'No se pudieron cargar tus días habilitados por permisos en la base de datos.';
+				}
 			}
 
 			// Eliminar la precarga (ya fue aplicada)

@@ -228,25 +228,30 @@
 		errorMsg = '';
 
 		if (confirmDelete.tipo === 'empresa') {
-			const { error } = await supabase.from('empresas').delete().eq('id', confirmDelete.id);
+			const { data, error } = await supabase.from('empresas').delete().eq('id', confirmDelete.id).select();
 			if (error) { errorMsg = 'Error al eliminar empresa: ' + error.message; }
+			else if (!data || data.length === 0) { errorMsg = 'Fallo de permisos (RLS). No tienes permiso para eliminar empresas.'; }
 			else { await cargarEmpresas(); await cargarAlumnos(); showSuccess('✓ Empresa eliminada'); }
 		}
 
 		if (confirmDelete.tipo === 'alumno') {
+			// Borrar días primero (ignorar si no tenía)
 			await supabase.from('dias_habilitados').delete().eq('perfil_id', confirmDelete.id);
-			const { error } = await supabase.from('perfiles').delete().eq('id', confirmDelete.id);
+			// Borrar perfil
+			const { data, error } = await supabase.from('perfiles').delete().eq('id', confirmDelete.id).select();
 			if (error) { errorMsg = 'Error al eliminar alumno: ' + error.message; }
+			else if (!data || data.length === 0) { errorMsg = 'Fallo de permisos (RLS). El admin no tiene permiso para borrar perfiles. Ejecuta el SQL correspondiente.'; }
 			else { await cargarAlumnos(); showSuccess('✓ Alumno eliminado'); }
 		}
 
 		if (confirmDelete.tipo === 'precarga') {
-			const { error } = await supabase.from('alumnos_precargados').delete().eq('id', confirmDelete.id);
+			const { data, error } = await supabase.from('alumnos_precargados').delete().eq('id', confirmDelete.id).select();
 			if (error) { errorMsg = 'Error al eliminar precarga: ' + error.message; }
+			else if (!data || data.length === 0) { errorMsg = 'Fallo de permisos (RLS). No puedes borrar esta precarga.'; }
 			else { await cargarPrecargados(); showSuccess('✓ Precarga eliminada'); }
 		}
 
-		confirmDelete = null;
+		if (!errorMsg) confirmDelete = null;
 	}
 
 	async function agregarPrecarga() {
