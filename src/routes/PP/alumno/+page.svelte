@@ -115,30 +115,25 @@
 			.single();
 
 		if (precarga) {
-			// Hay precarga → aplicar los datos al perfil (ya sea creándolo o actualizándolo)
+			// Hay precarga → aplicar los datos al perfil usando upsert
+			// (funciona tanto si el perfil no existe como si ya fue creado por trigger)
 			const dias = precarga.alumnos_precargados_dias ?? [];
 			const rows = dias.map(d => ({ perfil_id: session.user.id, dia: d.dia }));
 
-			if (pe || !p) {
-				// El perfil no existe aún → crear con los datos precargados
-				const { error: insertErr } = await supabase
-					.from('perfiles')
-					.insert({
-						id: session.user.id,
-						email: userEmail,
-						rol: 'student',
-						empresa_id: precarga.empresa_id ?? null,
-						horario_entrada: precarga.horario_entrada ?? null
-					});
-				if (insertErr) {
-					console.error('Error creando perfil desde precarga:', insertErr);
-					errorMsg = 'Error al configurar tu perfil. Contactá al administrador.';
-					loading = false;
-					return;
-				}
-			} else {
-				// El perfil ya existe (trigger automático) → actualizarlo con los datos precargados
-				await supabase
+			const { error: upsertErr } = await supabase
+				.from('perfiles')
+				.upsert({
+					id: session.user.id,
+					email: userEmail,
+					rol: 'student',
+					empresa_id: precarga.empresa_id ?? null,
+					horario_entrada: precarga.horario_entrada ?? null
+				}, { onConflict: 'id' });
+
+			if (upsertErr) {
+				console.error('Error aplicando precarga:', upsertErr);
+				// Si el upsert falla, intentar solo UPDATE (por si RLS bloquea INSERT)
+				const { error: updateErr } = await supabase
 					.from('perfiles')
 					.update({
 						empresa_id: precarga.empresa_id ?? null,
@@ -146,6 +141,13 @@
 						rol: 'student'
 					})
 					.eq('id', session.user.id);
+
+				if (updateErr) {
+					console.error('Error en fallback UPDATE:', updateErr);
+					errorMsg = 'Error al configurar tu perfil. Contactá al administrador.';
+					loading = false;
+					return;
+				}
 			}
 
 			// Insertar días habilitados
@@ -162,10 +164,23 @@
 			return;
 		}
 
+
 		// Sin precarga → cargar perfil normal
 		if (pe || !p) {
-			errorMsg = 'No se encontró tu perfil. Contactá al administrador.';
-			loading = false;
+			// No hay perfil aún (trigger no alcanzó a correr o primer login sin precarga)
+			// Crear perfil básico automáticamente
+			const { error: createErr } = await supabase
+				.from('perfiles')
+				.upsert({ id: session.user.id, email: userEmail, rol: 'student' }, { onConflict: 'id' });
+
+			if (createErr) {
+				console.error('Error creando perfil básico:', createErr);
+				errorMsg = 'No se encontró tu perfil. Contactá al administrador.';
+				loading = false;
+				return;
+			}
+			// Recargar ahora que el perfil existe
+			await cargarPerfil();
 			return;
 		}
 
