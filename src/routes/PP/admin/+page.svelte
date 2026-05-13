@@ -349,9 +349,18 @@
 		<p class="text-muted small mb-0">{isAdmin ? 'Gestión de alumnos en pasantía' : 'Generación de acceso a pasantías'}</p>
 	</div>
 	<div class="col-md-6 text-md-end mt-3 mt-md-0">
-		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
-		GENERAR QR DE INGRESO
-		</button>
+		<div class="d-flex flex-column align-items-md-end gap-2">
+			<button class="btn btn-primary fw-bold px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
+			NUEVO QR DE INGRESO
+			</button>
+			{#if qrDataURL}
+				<div class="card glass-card p-2 text-center" style="max-width: 200px;">
+					<img src={qrDataURL} alt="QR" class="img-fluid mx-auto mb-1" style="max-width: 100px;" />
+					<button class="btn btn-dark btn-sm py-0 fw-bold" style="font-size: 0.7rem;" onclick={toggleFullScreen}>⛶ PANTALLA COMPLETA</button>
+					<div class="text-danger fw-bold mt-1" style="font-size: 0.7rem;">{timeLeft}s</div>
+				</div>
+			{/if}
+		</div>
 	</div>
 </div>
 

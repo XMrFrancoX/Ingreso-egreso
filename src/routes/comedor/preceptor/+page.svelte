@@ -145,8 +145,11 @@
             <h5 class="fw-bold philips-text mb-2">Expira en {timeLeft}s</h5>
             {#if qrDataURL}
                 <img src={qrDataURL} alt="QR" class="img-fluid mx-auto mb-2" style="max-width: 150px;" />
+                <div class="d-grid mt-2">
+                    <button class="btn btn-dark btn-sm fw-bold" onclick={toggleFullScreen}>⛶ Pantalla Completa</button>
+                </div>
             {/if}
-            <p class="small text-muted mb-0">Se actualiza automáticamente</p>
+            <p class="small text-muted mb-0 mt-2">Se actualiza automáticamente</p>
         </div>
     </div>
 </div>
