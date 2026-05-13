@@ -18,6 +18,21 @@
 	let pendingReturns = $derived(movimientos.filter(m => !m.hora_ingreso).length);
 	let completedReturns = $derived(movimientos.filter(m => m.hora_ingreso).length);
 
+	let timeOffset = 0;
+	let isFullScreen = $state(false);
+
+	async function syncTime() {
+		try {
+			const res = await fetch(window.location.origin + '/?_t=' + Date.now(), { method: 'HEAD' });
+			const dateStr = res.headers.get('Date');
+			if (dateStr) {
+				timeOffset = new Date(dateStr).getTime() - Date.now();
+			}
+		} catch (e) {
+			console.warn('Error sincronizando hora:', e);
+		}
+	}
+
 	onMount(async () => {
         const { data } = await supabase.auth.getSession();
         session = data.session;
@@ -26,6 +41,7 @@
             return;
         }
 
+		await syncTime();
 		await loadMovimientos();
 		interval = setInterval(loadMovimientos, 5000); // Polling cada 5 segundos
 		
@@ -34,6 +50,10 @@
 			timeLeft--;
 			if (timeLeft <= 0) createNewQR();
 		}, 1000);
+
+		document.addEventListener('fullscreenchange', () => {
+			isFullScreen = !!document.fullscreenElement;
+		});
 	});
 
 	onDestroy(() => {
@@ -59,7 +79,7 @@
 	}
 
 	function createNewQR() {
-		const payload = { app: 'comedor', timestamp: Date.now() };
+		const payload = { app: 'comedor', timestamp: Date.now() + timeOffset };
 		const newToken = JSON.stringify(payload);
 		qrToken = 'QR Dinámico Activo';
 		generateQRCode(newToken);
@@ -80,6 +100,17 @@
 			console.log('QR generado con éxito');
 		} catch (err) {
 			console.error('Error generando QR:', err);
+		}
+	}
+
+	function toggleFullScreen() {
+		const elem = document.getElementById('fullscreen-qr-view');
+		if (!document.fullscreenElement) {
+			elem?.requestFullscreen().catch(err => {
+				console.error(`Error attempting to enable fullscreen: ${err.message}`);
+			});
+		} else {
+			document.exitFullscreen();
 		}
 	}
 </script>
@@ -137,7 +168,10 @@
 				<div class="bg-light p-2 rounded fw-bold text-danger mb-3">
 					Expira en: {timeLeft} segundos
 				</div>
-                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Forzar nuevo código</button>
+                <div class="d-flex justify-content-center gap-2 mt-3">
+                    <button class="btn btn-outline-primary btn-sm" onclick={createNewQR}>Forzar nuevo código</button>
+                    <button class="btn btn-dark btn-sm" onclick={toggleFullScreen}>⛶ Pantalla Completa</button>
+                </div>
 			</div>
 		</div>
 	</div>
@@ -207,4 +241,15 @@
 			</tbody>
 		</table>
 	</div>
+</div>
+
+<!-- FULLSCREEN VIEW -->
+<div id="fullscreen-qr-view" class="bg-white flex-column justify-content-center align-items-center text-center" style="display: {isFullScreen ? 'flex' : 'none'} !important; width: 100vw; height: 100vh;">
+	{#if isFullScreen}
+		<h1 class="fw-bold philips-text mb-4" style="font-size: 4vw;">Control de Comedor</h1>
+		<p class="text-muted fs-4 mb-4">Escaneá este código para registrar tu salida/ingreso.</p>
+		<img src={qrDataURL} alt="QR" style="width: 50vw; max-width: 50vh; object-fit: contain;" class="shadow-lg border rounded p-4 mb-4 bg-white" />
+		<h2 class="fw-bold text-danger mb-5" style="font-size: 3vw;">Expira en: {timeLeft}s</h2>
+		<button class="btn btn-outline-secondary btn-lg" onclick={toggleFullScreen}>Salir de Pantalla Completa</button>
+	{/if}
 </div>

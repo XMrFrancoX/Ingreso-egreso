@@ -18,6 +18,20 @@
 	let html5QrCode;
 	let cameraError = $state('');
 
+	let timeOffset = 0;
+
+	async function syncTime() {
+		try {
+			const res = await fetch(window.location.origin + '/?_t=' + Date.now(), { method: 'HEAD' });
+			const dateStr = res.headers.get('Date');
+			if (dateStr) {
+				timeOffset = new Date(dateStr).getTime() - Date.now();
+			}
+		} catch (e) {
+			console.warn('Error sincronizando hora:', e);
+		}
+	}
+
 	const DIAS = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 
 	function diaDeHoy() {
@@ -38,6 +52,7 @@
 		session = data.session;
 		if (!session) { goto('/PP'); return; }
 
+		await syncTime();
 		await cargarPerfil();
 		
 		if (!qrVerified && !registroHoy && empresa && hoyHabilitado) {
@@ -79,7 +94,7 @@
 			const data = JSON.parse(decodedText);
 			if (data.app === 'PP') {
 				// Allow up to 5 minutes (300000 ms) of difference to account for clock drift between devices
-				if (Math.abs(Date.now() - data.timestamp) <= 300000) {
+				if (Math.abs((Date.now() + timeOffset) - data.timestamp) <= 300000) {
 					qrVerified = true;
 					if (html5QrCode && html5QrCode.isScanning) {
 						await html5QrCode.stop().catch(e => console.error(e));

@@ -12,6 +12,21 @@
 	let loadingRegistros = $state(false);
 	let isAdmin = $state(false);
 
+	let timeOffset = 0;
+	let isFullScreen = $state(false);
+
+	async function syncTime() {
+		try {
+			const res = await fetch(window.location.origin + '/?_t=' + Date.now(), { method: 'HEAD' });
+			const dateStr = res.headers.get('Date');
+			if (dateStr) {
+				timeOffset = new Date(dateStr).getTime() - Date.now();
+			}
+		} catch (e) {
+			console.warn('Error sincronizando hora:', e);
+		}
+	}
+
 	let qrToken = $state('');
 	let qrDataURL = $state('');
 	let timeLeft = $state(60);
@@ -57,6 +72,7 @@
 		isAdmin = p.rol === 'admin';
 
 		await Promise.all([
+			syncTime(),
 			isAdmin ? cargarAlumnos() : Promise.resolve(),
 			isAdmin ? cargarEmpresas() : Promise.resolve(),
 			isAdmin ? cargarPrecargados() : Promise.resolve(),
@@ -69,6 +85,10 @@
 			if (timeLeft <= 0) createNewQR();
 		}, 1000);
 
+		document.addEventListener('fullscreenchange', () => {
+			isFullScreen = !!document.fullscreenElement;
+		});
+
 		loading = false;
 	});
 
@@ -77,7 +97,7 @@
 	});
 
 	function createNewQR() {
-		const payload = { app: 'PP', timestamp: Date.now() };
+		const payload = { app: 'PP', timestamp: Date.now() + timeOffset };
 		const newToken = JSON.stringify(payload);
 		qrToken = 'QR Dinámico Activo';
 		generateQRCode(newToken);
@@ -93,6 +113,17 @@
 			});
 		} catch (err) {
 			console.error('Error generando QR:', err);
+		}
+	}
+
+	function toggleFullScreen() {
+		const elem = document.getElementById('fullscreen-qr-view');
+		if (!document.fullscreenElement) {
+			elem?.requestFullscreen().catch(err => {
+				console.error(`Error attempting to enable fullscreen: ${err.message}`);
+			});
+		} else {
+			document.exitFullscreen();
 		}
 	}
 
@@ -342,7 +373,10 @@
 				<div class="bg-light p-2 rounded fw-bold text-danger mb-3">
 					Expira en: {timeLeft} segundos
 				</div>
-                <button class="btn btn-outline-primary btn-sm mt-3" onclick={createNewQR}>Forzar nuevo código</button>
+                <div class="d-flex justify-content-center gap-2 mt-3">
+                    <button class="btn btn-outline-primary btn-sm" onclick={createNewQR}>Forzar nuevo código</button>
+                    <button class="btn btn-dark btn-sm" onclick={toggleFullScreen}>⛶ Pantalla Completa</button>
+                </div>
 			</div>
 		</div>
 	</div>
@@ -638,6 +672,17 @@
 				</tbody>
 			</table>
 		</div>
+	{/if}
+</div>
+
+<!-- FULLSCREEN VIEW -->
+<div id="fullscreen-qr-view" class="bg-white flex-column justify-content-center align-items-center text-center" style="display: {isFullScreen ? 'flex' : 'none'} !important; width: 100vw; height: 100vh;">
+	{#if isFullScreen}
+		<h1 class="fw-bold philips-text mb-4" style="font-size: 4vw;">Control de Pasantías</h1>
+		<p class="text-muted fs-4 mb-4">Escaneá este código para registrar tu ingreso a la pasantía.</p>
+		<img src={qrDataURL} alt="QR" style="width: 50vw; max-width: 50vh; object-fit: contain;" class="shadow-lg border rounded p-4 mb-4 bg-white" />
+		<h2 class="fw-bold text-danger mb-5" style="font-size: 3vw;">Expira en: {timeLeft}s</h2>
+		<button class="btn btn-outline-secondary btn-lg" onclick={toggleFullScreen}>Salir de Pantalla Completa</button>
 	{/if}
 </div>
 
