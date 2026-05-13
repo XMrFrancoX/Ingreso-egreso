@@ -134,12 +134,16 @@
 			.eq('rol', 'student')
 			.order('email');
 		if (error) { console.error(error); return; }
-		alumnos = (data ?? []).map(a => ({
+		const list = (data ?? []).map(a => ({
 			...a,
 			empresa_id: a.empresa?.id ?? '',
 			dias: a.dias_habilitados?.map(d => d.dia) ?? [],
 			horario_entrada: a.horario_entrada ?? ''
 		}));
+		
+		// Filtrar: Solo mostrar si tienen empresa, horario o días asignados 
+		// (evita mostrar alumnos que solo se registraron para Comedor)
+		alumnos = list.filter(a => a.empresa_id || a.horario_entrada || a.dias.length > 0);
 	}
 
 	async function cargarEmpresas() {
@@ -266,13 +270,16 @@
 		}
 
 		if (confirmDelete.tipo === 'alumno') {
-			// Borrar días primero (ignorar si no tenía)
+			// En lugar de borrar el perfil (que rompería Comedor), solo limpiamos los datos de PP
 			await supabase.from('dias_habilitados').delete().eq('perfil_id', confirmDelete.id);
-			// Borrar perfil
-			const { data, error } = await supabase.from('perfiles').delete().eq('id', confirmDelete.id).select();
-			if (error) { errorMsg = 'Error al eliminar alumno: ' + error.message; }
-			else if (!data || data.length === 0) { errorMsg = 'Fallo de permisos (RLS). El admin no tiene permiso para borrar perfiles. Ejecuta el SQL correspondiente.'; }
-			else { await cargarAlumnos(); showSuccess('✓ Alumno eliminado'); }
+			const { data, error } = await supabase
+				.from('perfiles')
+				.update({ empresa_id: null, horario_entrada: null })
+				.eq('id', confirmDelete.id)
+				.select();
+				
+			if (error) { errorMsg = 'Error al quitar de pasantías: ' + error.message; }
+			else { await cargarAlumnos(); showSuccess('✓ Alumno quitado de pasantías'); }
 		}
 
 		if (confirmDelete.tipo === 'precarga') {
@@ -288,17 +295,31 @@
 	async function agregarPrecarga() {
 		if (!precargaEmail.trim()) { errorMsg = 'Ingresá un email válido.'; return; }
 		addingPrecarga = true;
-		errorMsg = '';
-
 		const email = precargaEmail.trim().toLowerCase();
-
-		// Verificar que no esté ya en perfiles (ya se logueo antes)
-		const { data: existe } = await supabase
-			.from('perfiles').select('id').eq('email', email).maybeSingle();
-		if (existe) {
-			errorMsg = 'Este email ya tiene un perfil activo. Buscalo en la tabla de Alumnos.';
+		
+		// Verificar si ya está en precarga
+		const { data: yaPrecargado } = await supabase
+			.from('alumnos_precargados').select('id').eq('email', email).maybeSingle();
+		if (yaPrecargado) {
+			errorMsg = 'Este email ya está en la lista de espera (precarga).';
 			addingPrecarga = false;
 			return;
+		}
+		
+		// Verificar si ya tiene datos de PP en su perfil
+		const { data: perfilExistente } = await supabase
+			.from('perfiles')
+			.select(`id, empresa_id, horario_entrada, dias_habilitados ( dia )`)
+			.eq('email', email)
+			.maybeSingle();
+
+		if (perfilExistente) {
+			const tieneDatos = perfilExistente.empresa_id || perfilExistente.horario_entrada || (perfilExistente.dias_habilitados?.length > 0);
+			if (tieneDatos) {
+				errorMsg = 'Este alumno ya está activo en Pasantías. Buscalo en la tabla de Alumnos Registrados.';
+				addingPrecarga = false;
+				return;
+			}
 		}
 
 		const { data: precarga, error: pe } = await supabase
