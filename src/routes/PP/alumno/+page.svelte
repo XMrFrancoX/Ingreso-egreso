@@ -78,7 +78,8 @@
 		try {
 			const data = JSON.parse(decodedText);
 			if (data.app === 'PP') {
-				if (Date.now() - data.timestamp <= 60000) {
+				// Allow up to 5 minutes (300000 ms) of difference to account for clock drift between devices
+				if (Math.abs(Date.now() - data.timestamp) <= 300000) {
 					qrVerified = true;
 					if (html5QrCode && html5QrCode.isScanning) {
 						await html5QrCode.stop().catch(e => console.error(e));
