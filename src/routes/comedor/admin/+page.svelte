@@ -14,6 +14,10 @@
 	let addingCurso = $state(false);
 	let savingAlumnos = $state(new Set());
 
+	let movimientos = $state([]);
+    let selectedAlumnoId = $state('');
+    let isAuthorizing = $state(false);
+
 	const DIAS = ['L', 'M', 'X', 'J', 'V'];
 	const DIAS_NOMBRE = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 
@@ -31,9 +35,18 @@
 			.from('perfiles').select('rol').eq('id', session.user.id).single();
 		if (!p || (p.rol !== 'admin' && p.rol !== 'preceptor')) { goto('/comedor'); return; }
 
-		await Promise.all([cargarCursos(), cargarAlumnos()]);
+		await Promise.all([cargarCursos(), cargarAlumnos(), cargarMovimientos()]);
 		loading = false;
 	});
+
+    async function cargarMovimientos() {
+        const today = new Date().toLocaleDateString('en-CA');
+        const { data } = await supabase
+            .from('movimientos')
+            .select('*')
+            .eq('fecha', today);
+        movimientos = data || [];
+    }
 
 	async function cargarCursos() {
 		const { data, error } = await supabase
@@ -52,7 +65,7 @@
 	async function cargarAlumnos() {
 		const { data, error } = await supabase
 			.from('perfiles')
-			.select('id, email, curso_id')
+			.select('id, email, curso_id, curso:curso_id(nombre)')
 			.eq('rol', 'student')
 			.order('email');
 		if (error) { console.error(error); return; }
@@ -95,6 +108,62 @@
 		else { showSuccess('Alumno actualizado'); }
 		savingAlumnos.delete(alumnoId);
 	}
+
+    async function autorizarManual() {
+        if (!selectedAlumnoId) return alert('Seleccioná un alumno');
+        
+        isAuthorizing = true;
+        const ahora = new Date();
+        const hora = ahora.toTimeString().split(' ')[0];
+        const fecha = ahora.toLocaleDateString('en-CA');
+
+        // Verificar si tiene movimiento abierto hoy
+        const { data: abierto } = await supabase
+            .from('movimientos')
+            .select('*')
+            .eq('perfil_id', selectedAlumnoId)
+            .eq('fecha', fecha)
+            .is('hora_ingreso', null)
+            .maybeSingle();
+
+        let error;
+        if (abierto) {
+            // Registrar ingreso
+            const { error: err } = await supabase
+                .from('movimientos')
+                .update({ 
+                    hora_ingreso: hora, 
+                    firma_ingreso: 'Autorizado por Admin' 
+                })
+                .eq('id', abierto.id);
+            error = err;
+        } else {
+            // Registrar salida
+            const { error: err } = await supabase
+                .from('movimientos')
+                .insert({
+                    perfil_id: selectedAlumnoId,
+                    fecha,
+                    hora_salida: hora,
+                    firma_salida: 'Autorizado por Admin'
+                });
+            error = err;
+        }
+
+        if (error) {
+            alert('Error: ' + error.message);
+        } else {
+            selectedAlumnoId = '';
+            await cargarMovimientos();
+            // Cerrar modal
+            const modal = document.getElementById('autorizarModal');
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            bsModal.hide();
+            showSuccess('Movimiento registrado');
+        }
+        isAuthorizing = false;
+    }
+
 </script>
 
 <svelte:head>
@@ -106,10 +175,56 @@
 		<h2 class="fw-bold philips-text mb-1">Configuración Comedor</h2>
 		<p class="text-muted small mb-0">Gestión de cursos, horarios de regreso y alumnos</p>
 	</div>
-	<div class="col-md-6 text-md-end mt-3 mt-md-0">
+	<div class="col-md-6 text-md-end mt-3 mt-md-0 d-flex gap-2 justify-content-md-end">
+		<button class="btn btn-warning fw-bold px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#autorizarModal">
+			AUTORIZAR ALUMNO
+		</button>
 		<a href="/comedor/preceptor" class="btn btn-outline-secondary fw-bold px-4 shadow-sm">
 			VOLVER AL PANEL
 		</a>
+	</div>
+</div>
+
+<!-- Modal Autorizar Manual -->
+<div class="modal fade" id="autorizarModal" tabindex="-1" aria-hidden="true">
+	<div class="modal-dialog modal-dialog-centered">
+		<div class="modal-content glass-card border-0">
+			<div class="modal-header border-0 pb-0">
+				<h5 class="modal-title fw-bold philips-text w-100 text-center">Autorización Manual (Admin)</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body py-4">
+				<div class="mb-3">
+					<label for="alumnoSelect" class="form-label small fw-bold text-muted">SELECCIONAR ALUMNO</label>
+					<select id="alumnoSelect" class="form-select" bind:value={selectedAlumnoId}>
+						<option value="">Buscar alumno...</option>
+						{#each alumnos as a}
+							<option value={a.id}>{a.email} ({a.curso?.nombre || 'Sin curso'})</option>
+						{/each}
+					</select>
+				</div>
+
+				{#if selectedAlumnoId}
+					{@const estaAfuera = movimientos.some(m => m.perfil_id === selectedAlumnoId && !m.hora_ingreso)}
+					<div class="alert {estaAfuera ? 'alert-warning' : 'alert-success'} border-0 small mb-4">
+						<h6 class="fw-bold mb-1">Estado actual: {estaAfuera ? 'FUERA' : 'DENTRO'}</h6>
+						<p class="mb-0">Se registrará un {estaAfuera ? 'INGRESO' : 'EGRESO'} para este alumno.</p>
+					</div>
+
+					<button 
+						class="btn {estaAfuera ? 'btn-primary' : 'btn-warning'} w-100 fw-bold shadow-sm" 
+						onclick={autorizarManual}
+						disabled={isAuthorizing}
+					>
+						{#if isAuthorizing}
+							<span class="spinner-border spinner-border-sm me-2"></span> Procesando...
+						{:else}
+							CONFIRMAR {estaAfuera ? 'INGRESO' : 'EGRESO'}
+						{/if}
+					</button>
+				{/if}
+			</div>
+		</div>
 	</div>
 </div>
 

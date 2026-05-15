@@ -15,6 +15,10 @@
 	let timerInterval;
 	let errorMsg = $state('');
 
+    let alumnos = $state([]);
+    let selectedAlumnoId = $state('');
+    let isAuthorizing = $state(false);
+
 	let totalSalidas = $derived(movimientos.length);
 	let pendingReturns = $derived(movimientos.filter(m => !m.hora_ingreso).length);
 	let completedReturns = $derived(movimientos.filter(m => m.hora_ingreso).length);
@@ -43,7 +47,7 @@
         }
 
 		await syncTime();
-		await loadMovimientos();
+		await Promise.all([loadMovimientos(), cargarAlumnos()]);
 		interval = setInterval(loadMovimientos, 5000); // Polling cada 5 segundos
 		
 		createNewQR();
@@ -86,6 +90,16 @@
 			errorMsg = '';
         }
 	}
+
+    async function cargarAlumnos() {
+        const { data, error } = await supabase
+            .from('perfiles')
+            .select('id, email, curso:curso_id(nombre)')
+            .eq('rol', 'student')
+            .order('email');
+        if (error) console.error('Error cargando alumnos:', error);
+        else alumnos = data;
+    }
 
 	function createNewQR() {
 		const payload = { app: 'comedor', timestamp: Date.now() + timeOffset };
@@ -146,6 +160,61 @@
 			document.exitFullscreen();
 		}
 	}
+
+    async function autorizarManual() {
+        if (!selectedAlumnoId) return alert('Seleccioná un alumno');
+        
+        isAuthorizing = true;
+        const ahora = new Date();
+        const hora = ahora.toTimeString().split(' ')[0];
+        const fecha = ahora.toLocaleDateString('en-CA');
+
+        // Verificar si tiene movimiento abierto hoy
+        const { data: abierto } = await supabase
+            .from('movimientos')
+            .select('*')
+            .eq('perfil_id', selectedAlumnoId)
+            .eq('fecha', fecha)
+            .is('hora_ingreso', null)
+            .maybeSingle();
+
+        let error;
+        if (abierto) {
+            // Registrar ingreso
+            const { error: err } = await supabase
+                .from('movimientos')
+                .update({ 
+                    hora_ingreso: hora, 
+                    firma_ingreso: 'Autorizado por Preceptor' 
+                })
+                .eq('id', abierto.id);
+            error = err;
+        } else {
+            // Registrar salida
+            const { error: err } = await supabase
+                .from('movimientos')
+                .insert({
+                    perfil_id: selectedAlumnoId,
+                    fecha,
+                    hora_salida: hora,
+                    firma_salida: 'Autorizado por Preceptor'
+                });
+            error = err;
+        }
+
+        if (error) {
+            alert('Error: ' + error.message);
+        } else {
+            selectedAlumnoId = '';
+            await loadMovimientos();
+            // Cerrar modal (esto es rústico pero efectivo con BS5)
+            const modal = document.getElementById('autorizarModal');
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            bsModal.hide();
+        }
+        isAuthorizing = false;
+    }
+
 </script>
 
 <svelte:head>
@@ -159,14 +228,17 @@
 	</div>
     <div class="col-md-3">
         <div class="input-group input-group-sm shadow-sm">
-            <span class="input-group-text bg-white border-end-0">📅 Fecha:</span>
+            <span class="input-group-text bg-white border-end-0">Fecha:</span>
             <input type="date" class="form-control border-start-0" bind:value={selectedDate} onchange={() => loadMovimientos()}>
         </div>
     </div>
 	<div class="col-md-4 text-md-end mt-3 mt-md-0 d-flex gap-2 justify-content-md-end">
 		<a href="/comedor/admin" class="btn btn-outline-secondary fw-bold px-3 shadow-sm d-flex align-items-center gap-2">
-			⚙️ CONFIG
+			CONFIG
 		</a>
+		<button class="btn btn-warning fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#autorizarModal">
+			AUTORIZAR ALUMNO
+		</button>
 		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
 			GENERAR QR DE SALIDA
 		</button>
@@ -176,6 +248,49 @@
 {#if errorMsg}
 	<div class="alert alert-danger border-0 rounded-3 mb-4">{errorMsg}</div>
 {/if}
+
+<!-- Modal Autorizar Manual -->
+<div class="modal fade" id="autorizarModal" tabindex="-1" aria-hidden="true">
+	<div class="modal-dialog modal-dialog-centered">
+		<div class="modal-content glass-card border-0">
+			<div class="modal-header border-0 pb-0">
+				<h5 class="modal-title fw-bold philips-text w-100 text-center">Autorización Manual</h5>
+				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			</div>
+			<div class="modal-body py-4">
+				<div class="mb-3">
+					<label for="alumnoSelect" class="form-label small fw-bold text-muted">SELECCIONAR ALUMNO</label>
+					<select id="alumnoSelect" class="form-select" bind:value={selectedAlumnoId}>
+						<option value="">Buscar alumno...</option>
+						{#each alumnos as a}
+							<option value={a.id}>{a.email} ({a.curso?.nombre || 'Sin curso'})</option>
+						{/each}
+					</select>
+				</div>
+
+				{#if selectedAlumnoId}
+					{@const estaAfuera = movimientos.some(m => m.perfil_id === selectedAlumnoId && !m.hora_ingreso)}
+					<div class="alert {estaAfuera ? 'alert-warning' : 'alert-success'} border-0 small mb-4">
+						<h6 class="fw-bold mb-1">Estado actual: {estaAfuera ? 'FUERA' : 'DENTRO'}</h6>
+						<p class="mb-0">Se registrará un {estaAfuera ? 'INGRESO' : 'EGRESO'} para este alumno.</p>
+					</div>
+
+					<button 
+						class="btn {estaAfuera ? 'btn-primary' : 'btn-warning'} w-100 fw-bold shadow-sm" 
+						onclick={autorizarManual}
+						disabled={isAuthorizing}
+					>
+						{#if isAuthorizing}
+							<span class="spinner-border spinner-border-sm me-2"></span> Procesando...
+						{:else}
+							CONFIRMAR {estaAfuera ? 'INGRESO' : 'EGRESO'}
+						{/if}
+					</button>
+				{/if}
+			</div>
+		</div>
+	</div>
+</div>
 
 {#if qrToken}
 <div class="row mb-4 justify-content-center">
