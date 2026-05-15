@@ -53,7 +53,24 @@
 	const TODOS_DIAS = ['L', 'M', 'X', 'J', 'V'];
 	const DIAS_NOMBRE = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 
-	function fmtHora(t) { return t ? t.substring(0, 5) : '—'; }
+		function fmtHora(t) { return t ? t.substring(0, 5) : '—'; }
+
+	function fmtDiferencia(real, asignado) {
+		if (!real || !asignado) return null;
+		const [hR, mR] = real.split(':').map(Number);
+		const [hA, mA] = asignado.split(':').map(Number);
+		const minReal = hR * 60 + mR;
+		const minAsignado = hA * 60 + mA;
+		const diff = minReal - minAsignado;
+		
+		if (diff <= 0) return { texto: 'En Escuela', clase: 'bg-success-subtle text-success border-success-subtle' };
+		if (diff < 60) return { texto: `Tarde: ${diff} min`, clase: 'bg-danger-subtle text-danger border-danger-subtle' };
+		
+		const h = Math.floor(diff / 60);
+		const m = diff % 60;
+		return { texto: `Tarde: ${h}h ${m}m`, clase: 'bg-danger-subtle text-danger border-danger-subtle' };
+	}
+
 
 	function showSuccess(msg) {
 		successMsg = msg;
@@ -165,13 +182,20 @@
 
 	async function cargarRegistros() {
 		loadingRegistros = true;
+		errorMsg = '';
 		const { data, error } = await supabase
 			.from('registros')
-			.select(`id, fecha, hora_entrada_real, perfil:perfil_id ( email, empresa:empresa_id ( nombre ) )`)
+			.select(`id, fecha, hora_entrada_real, perfil:perfil_id ( email, horario_entrada, empresa:empresa_id ( nombre ) )`)
 			.eq('fecha', selectedDate)
 			.order('hora_entrada_real');
-		if (error) console.error(error);
-		registros = data ?? [];
+		
+		if (error) {
+			console.error(error);
+			errorMsg = 'Error al cargar registros: ' + error.message;
+			registros = [];
+		} else {
+			registros = data ?? [];
+		}
 		loadingRegistros = false;
 	}
 
@@ -668,7 +692,7 @@
 				type="date"
 				class="form-control border-start-0"
 				bind:value={selectedDate}
-				onchange={cargarRegistros}
+				onchange={() => cargarRegistros()}
 			/>
 		</div>
 	</div>
@@ -684,18 +708,25 @@
 					<tr>
 						<th class="ps-4">Alumno</th>
 						<th>Empresa</th>
-						<th>Hora de Entrada</th>
+						<th>Asignado</th>
+						<th>Entrada Real</th>
 						<th class="pe-4">Estado</th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each registros as reg (reg.id)}
+						{@const diff = fmtDiferencia(reg.hora_entrada_real, reg.perfil?.horario_entrada)}
 						<tr>
 							<td class="ps-4 fw-medium text-primary small">{reg.perfil?.email ?? '—'}</td>
 							<td class="small text-muted">{reg.perfil?.empresa?.nombre ?? '—'}</td>
+							<td><span class="badge bg-light text-muted border-0 fw-normal">{fmtHora(reg.perfil?.horario_entrada)}</span></td>
 							<td><span class="badge bg-light text-dark border">{fmtHora(reg.hora_entrada_real)}</span></td>
 							<td class="pe-4">
-								<span class="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-3">Registrado</span>
+								{#if diff}
+									<span class="badge rounded-pill border px-3 {diff.clase}">{diff.texto}</span>
+								{:else}
+									<span class="badge rounded-pill bg-light text-muted border px-3">Presente</span>
+								{/if}
 							</td>
 						</tr>
 					{/each}

@@ -13,6 +13,7 @@
     let selectedDate = $state(new Date().toLocaleDateString('en-CA'));
 	let timeLeft = $state(60);
 	let timerInterval;
+	let errorMsg = $state('');
 
 	let totalSalidas = $derived(movimientos.length);
 	let pendingReturns = $derived(movimientos.filter(m => !m.hora_ingreso).length);
@@ -66,15 +67,23 @@
             .from('movimientos')
             .select(`
                 *,
-                perfiles:perfil_id (email)
+                perfiles:perfil_id (
+					email,
+					curso:curso_id (
+						nombre,
+						horarios:cursos_horarios (dia, hora_regreso)
+					)
+				)
             `)
             .eq('fecha', selectedDate)
             .order('hora_salida', { ascending: false });
 
         if (error) {
             console.error('Error cargando movimientos:', error);
+			errorMsg = 'Error al cargar datos: ' + error.message;
         } else {
             movimientos = data;
+			errorMsg = '';
         }
 	}
 
@@ -103,6 +112,30 @@
 		}
 	}
 
+	function fmtHora(t) { return t ? t.substring(0, 5) : '—'; }
+
+	function getDiaDeFecha(fechaStr) {
+		const d = new Date(fechaStr + 'T12:00:00');
+		const keys = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+		return keys[d.getDay()];
+	}
+
+	function fmtDiferencia(real, asignado) {
+		if (!real || !asignado) return null;
+		const [hR, mR] = real.split(':').map(Number);
+		const [hA, mA] = asignado.split(':').map(Number);
+		const minReal = hR * 60 + mR;
+		const minAsignado = hA * 60 + mA;
+		const diff = minReal - minAsignado;
+		
+		if (diff <= 0) return { texto: 'En Escuela', clase: 'bg-success-subtle text-success border-success-subtle' };
+		if (diff < 60) return { texto: `Tarde: ${diff} min`, clase: 'bg-danger-subtle text-danger border-danger-subtle' };
+		
+		const h = Math.floor(diff / 60);
+		const m = diff % 60;
+		return { texto: `Tarde: ${h}h ${m}m`, clase: 'bg-danger-subtle text-danger border-danger-subtle' };
+	}
+
 	function toggleFullScreen() {
 		const elem = document.getElementById('fullscreen-qr-view');
 		if (!document.fullscreenElement) {
@@ -127,15 +160,22 @@
     <div class="col-md-3">
         <div class="input-group input-group-sm shadow-sm">
             <span class="input-group-text bg-white border-end-0">📅 Fecha:</span>
-            <input type="date" class="form-control border-start-0" bind:value={selectedDate} onchange={loadMovimientos}>
+            <input type="date" class="form-control border-start-0" bind:value={selectedDate} onchange={() => loadMovimientos()}>
         </div>
     </div>
-	<div class="col-md-4 text-md-end mt-3 mt-md-0">
+	<div class="col-md-4 text-md-end mt-3 mt-md-0 d-flex gap-2 justify-content-md-end">
+		<a href="/comedor/admin" class="btn btn-outline-secondary fw-bold px-3 shadow-sm d-flex align-items-center gap-2">
+			⚙️ CONFIG
+		</a>
 		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
 			GENERAR QR DE SALIDA
 		</button>
 	</div>
 </div>
+
+{#if errorMsg}
+	<div class="alert alert-danger border-0 rounded-3 mb-4">{errorMsg}</div>
+{/if}
 
 {#if qrToken}
 <div class="row mb-4 justify-content-center">
@@ -209,9 +249,10 @@
 			<thead class="table-light text-muted small text-uppercase">
 				<tr>
 					<th class="ps-4">Alumno</th>
-					<th>Hora Salida</th>
-					<th>Firma Salida</th>
-					<th>Hora Ingreso</th>
+					<th>Curso</th>
+					<th>Salida</th>
+					<th>Límite</th>
+					<th>Ingreso</th>
 					<th class="pe-4">Estado</th>
 				</tr>
 			</thead>
@@ -220,22 +261,37 @@
 					<tr><td colspan="5" class="py-5 text-center text-muted">No hay movimientos registrados hoy.</td></tr>
 				{:else}
 					{#each movimientos as mov (mov.id)}
+						{@const diaActual = getDiaDeFecha(selectedDate)}
+						{@const horarioRegreso = mov.perfiles?.curso?.horarios?.find(h => h.dia === diaActual)?.hora_regreso}
+						{@const diff = mov.hora_ingreso ? fmtDiferencia(mov.hora_ingreso, horarioRegreso) : null}
 						<tr>
-							<td class="ps-4 fw-medium text-primary">{mov.perfiles?.email || 'Desconocido'}</td>
-							<td><span class="badge bg-light text-dark border">{mov.hora_salida.substring(0,5)}</span></td>
-							<td class="text-muted small italic">{mov.firma_salida}</td>
+							<td class="ps-4">
+								<div class="fw-medium text-primary small">{mov.perfiles?.email || 'Desconocido'}</div>
+								<div class="text-muted" style="font-size: 0.7rem;">{mov.firma_salida}</div>
+							</td>
+							<td class="small text-muted">{mov.perfiles?.curso?.nombre || '—'}</td>
+							<td><span class="badge bg-light text-dark border-0 fw-normal">{mov.hora_salida.substring(0,5)}</span></td>
+							<td class="small">
+								{#if horarioRegreso}
+									<span class="badge bg-light text-muted border-0 fw-normal">{horarioRegreso.substring(0,5)}</span>
+								{:else}
+									<span class="text-muted">—</span>
+								{/if}
+							</td>
 							<td>
 								{#if mov.hora_ingreso}
-									<span class="badge bg-success">{mov.hora_ingreso.substring(0,5)}</span>
+									<span class="badge bg-light text-dark border">{mov.hora_ingreso.substring(0,5)}</span>
 								{:else}
-									<span class="text-muted">-</span>
+									<span class="text-muted">—</span>
 								{/if}
 							</td>
 							<td class="pe-4">
-								{#if mov.hora_ingreso}
-									<span class="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-3">En Escuela</span>
-								{:else}
+								{#if !mov.hora_ingreso}
 									<span class="badge rounded-pill bg-warning-subtle text-warning-emphasis border border-warning-subtle px-3">Ausente</span>
+								{:else if diff}
+									<span class="badge rounded-pill border px-3 {diff.clase}">{diff.texto}</span>
+								{:else}
+									<span class="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-3">En Escuela</span>
 								{/if}
 							</td>
 						</tr>
