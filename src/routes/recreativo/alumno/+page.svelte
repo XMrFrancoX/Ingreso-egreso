@@ -12,7 +12,7 @@
 	let cameraError = $state('');
 
     let items = $state([]);
-    let selectedItemId = $state('');
+    let selectedItemIds = $state([]);
     let pendingMovimientos = $state([]);
 
 	let timeOffset = 0;
@@ -94,7 +94,8 @@
 	async function onScanSuccess(decodedText) {
 		try {
 			const data = JSON.parse(decodedText);
-			if (data.app === 'recreativo') {
+			// Aceptamos cualquier QR para facilitar
+			if (data.app === 'recreativo' || data.app === 'comedor' || data.app === 'PP') {
 				if (Math.abs((Date.now() + timeOffset) - data.timestamp) <= 300000) {
 					qrVerified = true;
 					if (html5QrCode && html5QrCode.isScanning) {
@@ -104,7 +105,7 @@
 					alert('Código QR Expirado. Pídele al preceptor que genere uno nuevo.');
 				}
 			} else {
-				alert('Código QR Inválido para Recreativo.');
+				alert('Código QR Inválido. Asegúrate de escanear un código válido de la escuela.');
 			}
 		} catch (e) {
 			alert('Código QR Inválido. Formato no reconocido.');
@@ -112,19 +113,21 @@
 	}
 
 	async function registrarRetiro() {
-		if (!selectedItemId) return alert('Por favor, selecciona un ítem para retirar.');
+		if (selectedItemIds.length === 0) return alert('Por favor, selecciona al menos un ítem para retirar.');
 		
 		loading = true;
 		const ahora = new Date();
 		const hora_retiro = ahora.toTimeString().split(' ')[0];
 		const fecha = ahora.toLocaleDateString('en-CA');
 
-		const { error } = await supabase.from('recreativo_movimientos').insert({
+        const registros = selectedItemIds.map(id => ({
 			perfil_id: session.user.id,
-            item_id: selectedItemId,
+            item_id: id,
 			fecha,
 			hora_retiro
-		});
+        }));
+
+		const { error } = await supabase.from('recreativo_movimientos').insert(registros);
 		
 		if (error) {
 			alert('Error al registrar retiro: ' + error.message);
@@ -132,10 +135,10 @@
 			return;
 		}
 		
-		selectedItemId = '';
+		selectedItemIds = [];
 		qrVerified = false;
 		await loadMisPendientes();
-		alert('Retiro registrado con éxito. Acercate al preceptor para recibir el ítem.');
+		alert('Retiro registrado con éxito. Acercate al preceptor para recibir los ítems.');
         window.location.reload(); 
 	}
 </script>
@@ -180,13 +183,22 @@
 						<p class="mb-0 small">Selecciona el ítem que deseas retirar.</p>
 					</div>
 
-					<h4 class="fw-semibold mb-3">Solicitar Ítem</h4>
-                    <select class="form-select form-select-lg mb-3" bind:value={selectedItemId}>
-                        <option value="">-- Elige un ítem --</option>
+					<h4 class="fw-semibold mb-3">Solicitar Ítems</h4>
+					<p class="small text-muted mb-3">Selecciona los elementos que te vas a llevar:</p>
+                    
+					<div class="card p-3 mb-4 shadow-sm text-start" style="max-height: 250px; overflow-y: auto;">
+						{#if items.length === 0}
+							<p class="text-muted small mb-0">No hay ítems disponibles actualmente.</p>
+						{/if}
                         {#each items as item}
-                            <option value={item.id}>{item.nombre}</option>
+							<div class="form-check mb-2">
+								<input class="form-check-input" type="checkbox" value={item.id} id="item-{item.id}" bind:group={selectedItemIds}>
+								<label class="form-check-label" for="item-{item.id}">
+									{item.nombre}
+								</label>
+							</div>
                         {/each}
-                    </select>
+                    </div>
 
 					<button class="btn btn-primary btn-lg w-100 fw-bold shadow-sm" onclick={registrarRetiro}>REGISTRAR RETIRO</button>
 				{/if}

@@ -92,8 +92,8 @@
 	async function onScanSuccess(decodedText) {
 		try {
 			const data = JSON.parse(decodedText);
-			// El QR de Comedor también sirve para Pasantías (PP) para facilitar el trabajo del preceptor
-			if (data.app === 'PP' || data.app === 'comedor') {
+			// El QR de cualquier aplicación sirve para facilitar el trabajo del preceptor
+			if (data.app === 'PP' || data.app === 'comedor' || data.app === 'recreativo') {
 				// Allow up to 5 minutes (300000 ms) of difference to account for clock drift between devices
 				if (Math.abs((Date.now() + timeOffset) - data.timestamp) <= 300000) {
 					qrVerified = true;
@@ -104,7 +104,7 @@
 					alert('Código QR Expirado. Pídele al preceptor que genere uno nuevo.');
 				}
 			} else {
-				alert('Código QR Inválido. Asegúrate de escanear el código de pasantías o comedor.');
+				alert('Código QR Inválido. Asegúrate de escanear un código válido de la escuela.');
 			}
 		} catch (e) {
 			alert('Código QR Inválido. Formato no reconocido.');
