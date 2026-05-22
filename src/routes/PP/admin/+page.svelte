@@ -396,7 +396,7 @@
 	<div class="col-md-6 text-md-end mt-3 mt-md-0">
 		<div class="d-flex flex-column align-items-md-end gap-2">
 			<button class="btn btn-primary fw-bold px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
-			NUEVO QR DE INGRESO
+				<i class="bi bi-qr-code me-2"></i>GENERAR QR DE FIRMA
 			</button>
 			{#if qrDataURL}
 				<div class="card glass-card p-2 text-center" style="max-width: 200px;">
@@ -414,7 +414,7 @@
 	<div class="modal-dialog modal-dialog-centered">
 		<div class="modal-content glass-card border-0">
 			<div class="modal-header border-0 pb-0">
-				<h5 class="modal-title fw-bold philips-text w-100 text-center">QR de Acceso Pasantías</h5>
+				<h5 class="modal-title fw-bold philips-text w-100 text-center">QR DE FIRMA</h5>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body text-center py-4">

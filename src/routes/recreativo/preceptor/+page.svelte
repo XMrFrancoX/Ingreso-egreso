@@ -225,7 +225,7 @@
 			RETIRO MANUAL
 		</button>
 		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
-			QR DE RETIRO
+			<i class="bi bi-qr-code me-2"></i>GENERAR QR DE FIRMA
 		</button>
 	</div>
 </div>
@@ -331,7 +331,7 @@
 	<div class="modal-dialog modal-dialog-centered">
 		<div class="modal-content glass-card border-0">
 			<div class="modal-header border-0 pb-0">
-				<h5 class="modal-title fw-bold philips-text w-100 text-center">QR Retiro Recreativo</h5>
+				<h5 class="modal-title fw-bold philips-text w-100 text-center">QR DE FIRMA</h5>
 				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
 			</div>
 			<div class="modal-body text-center py-4">
