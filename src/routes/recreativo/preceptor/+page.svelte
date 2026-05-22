@@ -406,7 +406,7 @@
 <!-- FULLSCREEN VIEW -->
 <div id="fullscreen-qr-view" class="bg-white flex-column justify-content-center align-items-center text-center" style="display: {isFullScreen ? 'flex' : 'none'} !important; width: 100vw; height: 100vh;">
 	{#if isFullScreen}
-		<h1 class="fw-bold philips-text mb-4" style="font-size: 4vw;">Recreativo</h1>
+		<h1 class="fw-bold philips-text mb-4" style="font-size: 4vw;">QR DE FIRMA</h1>
 		<p class="text-muted fs-4 mb-4">Escaneá este código para retirar un ítem.</p>
 		<img src={qrDataURL} alt="QR" style="width: 50vw; max-width: 50vh; object-fit: contain;" class="shadow-lg border rounded p-4 mb-4 bg-white" />
 		<h2 class="fw-bold text-danger mb-5" style="font-size: 3vw;">Expira en: {timeLeft}s</h2>
