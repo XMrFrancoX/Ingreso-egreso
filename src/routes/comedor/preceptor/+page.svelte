@@ -17,6 +17,7 @@
 
     let alumnos = $state([]);
     let selectedAlumnoId = $state('');
+    let buscarAlumno = $state('');
     let isAuthorizing = $state(false);
 
 	let totalSalidas = $derived(movimientos.length);
@@ -42,7 +43,7 @@
         const { data } = await supabase.auth.getSession();
         session = data.session;
         if (!session) {
-            goto('/comedor');
+            goto('/');
             return;
         }
 
@@ -259,10 +260,23 @@
 			</div>
 			<div class="modal-body py-4">
 				<div class="mb-3">
-					<label for="alumnoSelect" class="form-label small fw-bold text-muted">SELECCIONAR ALUMNO</label>
-					<select id="alumnoSelect" class="form-select" bind:value={selectedAlumnoId}>
-						<option value="">Buscar alumno...</option>
-						{#each alumnos as a}
+					<label class="form-label small fw-bold text-muted">BUSCAR ALUMNO</label>
+					<div class="input-group input-group-sm mb-2">
+						<span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+						<input
+							type="text"
+							class="form-control border-start-0"
+							placeholder="Filtrar por email o curso..."
+							bind:value={buscarAlumno}
+						/>
+					</div>
+					<select id="alumnoSelect" class="form-select" bind:value={selectedAlumnoId} size="5" style="height: auto;">
+						<option value="">— Seleccionar —</option>
+						{#each alumnos.filter(a =>
+							!buscarAlumno ||
+							a.email.toLowerCase().includes(buscarAlumno.toLowerCase()) ||
+							(a.curso?.nombre || '').toLowerCase().includes(buscarAlumno.toLowerCase())
+						) as a}
 							<option value={a.id}>{a.email} ({a.curso?.nombre || 'Sin curso'})</option>
 						{/each}
 					</select>

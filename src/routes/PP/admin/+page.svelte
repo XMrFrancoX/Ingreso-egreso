@@ -80,11 +80,11 @@
 	onMount(async () => {
 		const { data } = await supabase.auth.getSession();
 		session = data.session;
-		if (!session) { goto('/PP'); return; }
+		if (!session) { goto('/'); return; }
 
 		const { data: p } = await supabase
 			.from('perfiles').select('rol').eq('id', session.user.id).single();
-		if (!p || (p.rol !== 'admin' && p.rol !== 'preceptor')) { goto('/PP/alumno'); return; }
+		if (!p || (p.rol !== 'admin' && p.rol !== 'preceptor')) { goto('/'); return; }
 
 		isAdmin = p.rol === 'admin';
 
@@ -525,8 +525,8 @@
 				/>
 			</div>
 			<div class="col-md-3">
-				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Empresa</label>
-				<select class="form-select form-select-sm" bind:value={precargaEmpresaId}>
+				<label for="precargaEmpresaId" class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Empresa</label>
+				<select id="precargaEmpresaId" class="form-select form-select-sm" bind:value={precargaEmpresaId}>
 					<option value="">Sin asignar</option>
 					{#each empresas as emp}
 						<option value={emp.id}>{emp.nombre}</option>
@@ -534,8 +534,8 @@
 				</select>
 			</div>
 			<div class="col-md-2">
-				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Horario entrada</label>
-				<input type="time" class="form-control form-control-sm" bind:value={precargaHorario} />
+				<label for="precargaHorario" class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Horario entrada</label>
+				<input id="precargaHorario" type="time" class="form-control form-control-sm" bind:value={precargaHorario} />
 			</div>
 			<div class="col-md-2">
 				<label class="form-label small fw-semibold text-muted text-uppercase d-block" style="font-size:.75rem;">Días</label>

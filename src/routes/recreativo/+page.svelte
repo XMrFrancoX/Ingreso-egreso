@@ -4,133 +4,68 @@
     import { goto } from '$app/navigation';
 
 	let loading = $state(true);
-    let session = $state(null);
-    let errorMsg = $state('');
 
-    async function checkRoleAndRedirect(userSession, retries = 3) {
+    async function checkAccesoYRedirigir(userSession, retries = 3) {
         if (!userSession) return;
         
         const { data, error } = await supabase
             .from('perfiles')
-            .select('rol')
+            .select('rol, curso_id')
             .eq('id', userSession.user.id)
             .single();
 
         if (error || !data) {
             if (retries > 0) {
                 await new Promise(r => setTimeout(r, 1000));
-                return checkRoleAndRedirect(userSession, retries - 1);
+                return checkAccesoYRedirigir(userSession, retries - 1);
             }
-            console.error('Error obteniendo rol:', error);
+            goto('/');
             return;
         }
 
-        if (data.rol === 'student') {
-            goto('/recreativo/alumno');
-        } else if (data.rol === 'preceptor' || data.rol === 'admin') {
+        // Preceptor/admin: acceso directo
+        if (data.rol === 'preceptor' || data.rol === 'admin') {
             goto('/recreativo/preceptor');
+            return;
         }
+
+        // Alumno: verificar permiso
+        if (data.curso_id) {
+            const { data: permiso } = await supabase
+                .from('seccion_cursos_permitidos')
+                .select('id')
+                .eq('seccion', 'recreativo')
+                .eq('curso_id', data.curso_id)
+                .maybeSingle();
+
+            if (permiso) {
+                goto('/recreativo/alumno');
+                return;
+            }
+        }
+
+        // Sin permiso → volver al inicio con mensaje
+        goto('/?acceso=denegado&seccion=Recreativo');
     }
 
     onMount(async () => {
         const { data } = await supabase.auth.getSession();
-        session = data.session;
-        
-        if (session) {
-            if (!session.user.email.endsWith('@philips.edu.ar')) {
-                errorMsg = 'Acceso denegado. Solo se permiten correos @philips.edu.ar';
-                await supabase.auth.signOut();
-                session = null;
-                loading = false;
-            } else {
-                loading = true;
-                await checkRoleAndRedirect(session);
-                loading = false;
-            }
-        } else {
-            loading = false;
+
+        if (!data.session) {
+            goto('/');
+            return;
         }
 
-        supabase.auth.onAuthStateChange(async (_event, _session) => {
-            session = _session;
-            if (session) {
-                if (!session.user.email.endsWith('@philips.edu.ar')) {
-                    errorMsg = 'Acceso denegado. Solo se permiten correos @philips.edu.ar';
-                    supabase.auth.signOut();
-                    session = null;
-                } else {
-                    loading = true;
-                    await checkRoleAndRedirect(session);
-                    loading = false;
-                }
-            }
-        });
+        await checkAccesoYRedirigir(data.session);
+        loading = false;
     });
-
-    async function loginGoogle() {
-        errorMsg = '';
-        const { error } = await supabase.auth.signInWithOAuth({
-            provider: 'google',
-            options: {
-                redirectTo: window.location.origin + '/recreativo',
-                queryParams: {
-                    hd: 'philips.edu.ar', 
-                    prompt: 'select_account'
-                }
-            }
-        });
-        if (error) errorMsg = 'Error al iniciar sesión: ' + error.message;
-    }
-
-    async function logout() {
-        await supabase.auth.signOut();
-        session = null;
-    }
 </script>
-
-<div class="row text-center mt-5">
-	<div class="col-12">
-		<h2 class="fw-bold philips-text">Recreativo</h2>
-		<p class="text-muted">Gestión de Retiro y Devolución - Escuela Philips</p>
-	</div>
-</div>
 
 {#if loading}
     <div class="row justify-content-center mt-5">
         <div class="col-auto text-center">
             <div class="spinner-border text-primary mb-3" role="status"></div>
-            <p class="text-muted small">Cargando tu perfil...</p>
+            <p class="text-muted small">Verificando acceso...</p>
         </div>
     </div>
-{:else}
-    {#if errorMsg}
-        <div class="row justify-content-center mt-3">
-            <div class="col-md-6">
-                <div class="alert alert-danger text-center shadow-sm">
-                    {errorMsg}
-                </div>
-            </div>
-        </div>
-    {/if}
-
-    {#if !session}
-        <div class="row justify-content-center mt-4">
-            <div class="col-md-6 text-center">
-                <div class="card glass-card shadow-sm p-5">
-                    <h4 class="fw-bold mb-4">Acceso Institucional</h4>
-                    <button class="btn btn-lg btn-white border shadow-sm d-flex align-items-center justify-content-center mx-auto" onclick={loginGoogle}>
-                        <img src="https://www.google.com/favicon.ico" alt="Google" class="me-2" width="20">
-                        Iniciar sesión con Google
-                    </button>
-                    <p class="text-muted small mt-3">Usa tu cuenta institucional @philips.edu.ar</p>
-                </div>
-            </div>
-        </div>
-    {:else}
-        <div class="row text-center mb-4">
-            <div class="col-12 text-muted">
-                <p class="small">Redirigiendo... ({session.user.email}) | <button class="btn btn-link btn-sm text-danger p-0" onclick={logout}>Cerrar sesión</button></p>
-            </div>
-        </div>
-    {/if}
 {/if}

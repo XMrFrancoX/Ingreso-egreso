@@ -50,7 +50,7 @@
 	onMount(async () => {
 		const { data } = await supabase.auth.getSession();
 		session = data.session;
-		if (!session) { goto('/PP'); return; }
+		if (!session) { goto('/'); return; }
 
 		await syncTime();
 		await cargarPerfil();

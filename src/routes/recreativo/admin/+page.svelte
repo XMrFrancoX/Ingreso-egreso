@@ -13,7 +13,7 @@
         const { data } = await supabase.auth.getSession();
         session = data.session;
         if (!session) {
-            goto('/recreativo');
+            goto('/');
             return;
         }
 
@@ -25,7 +25,7 @@
             .single();
 
         if (!perfil || (perfil.rol !== 'preceptor' && perfil.rol !== 'admin')) {
-            goto('/recreativo');
+            goto('/');
             return;
         }
 

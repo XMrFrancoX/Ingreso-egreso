@@ -1,8 +1,200 @@
+<script>
+	import { onMount } from 'svelte';
+	import { supabase } from '$lib/supabaseClient';
+
+	let loading = $state(true);
+	let session = $state(null);
+	let perfil = $state(null);
+	let errorMsg = $state('');
+	let accessDeniedMsg = $state('');
+
+	let seccionesPermitidas = $state(new Set());
+
+	// ── CONFIG MODAL ──────────────────────────────────────────
+	let showConfig = $state(false);
+	let cursos = $state([]);
+	let alumnos = $state([]);
+	let visibilidad = $state({});
+	let loadingConfig = $state(false);
+	let savingConfig = $state(false);
+	let configMsg = $state('');
+	let nuevoCursoNombre = $state('');
+	let addingCurso = $state(false);
+	let savingAlumnos = $state(new Set());
+
+	// Filtros pestaña alumnos
+	let alumnoFiltro = $state('');
+	let soloSinCurso = $state(false);
+
+	// Tab activo en el modal
+	let activeTab = $state('visibilidad'); // 'visibilidad' | 'alumnos'
+
+	const SECCIONES = [
+		{ key: 'comedor',    label: 'Comedor',    icon: 'bi-cup-hot-fill' },
+		{ key: 'PP',         label: 'Pasantías',  icon: 'bi-briefcase-fill' },
+		{ key: 'recreativo', label: 'Recreativo', icon: 'bi-controller' },
+	];
+
+	// ── INICIO ────────────────────────────────────────────────
+	onMount(async () => {
+		const params = new URLSearchParams(window.location.search);
+		if (params.get('acceso') === 'denegado') {
+			const seccion = params.get('seccion') || '';
+			accessDeniedMsg = `No tenés permiso para acceder${seccion ? ' a ' + seccion : ' a esa sección'}.`;
+			history.replaceState({}, '', '/');
+		}
+
+		const { data } = await supabase.auth.getSession();
+		session = data.session;
+		if (session) await cargarPerfil(session);
+		loading = false;
+
+		supabase.auth.onAuthStateChange(async (_event, _session) => {
+			session = _session;
+			if (session) {
+				loading = true;
+				await cargarPerfil(session);
+				loading = false;
+			} else {
+				perfil = null;
+				seccionesPermitidas = new Set();
+			}
+		});
+	});
+
+	async function cargarPerfil(userSession, retries = 3) {
+		const { data, error } = await supabase
+			.from('perfiles')
+			.select('rol, curso_id, curso:curso_id(nombre)')
+			.eq('id', userSession.user.id)
+			.single();
+
+		if (error || !data) {
+			if (retries > 0) {
+				await new Promise(r => setTimeout(r, 1000));
+				return cargarPerfil(userSession, retries - 1);
+			}
+			return;
+		}
+
+		perfil = data;
+		if (data.rol === 'student') await cargarSeccionesPermitidas(data.curso_id);
+	}
+
+	async function cargarSeccionesPermitidas(cursoId) {
+		if (!cursoId) { seccionesPermitidas = new Set(); return; }
+		const { data } = await supabase
+			.from('seccion_cursos_permitidos')
+			.select('seccion')
+			.eq('curso_id', cursoId);
+		seccionesPermitidas = new Set((data ?? []).map(r => r.seccion));
+	}
+
+	// ── AUTH ──────────────────────────────────────────────────
+	async function loginGoogle() {
+		errorMsg = '';
+		const { error } = await supabase.auth.signInWithOAuth({
+			provider: 'google',
+			options: {
+				redirectTo: window.location.origin + '/',
+				queryParams: { hd: 'philips.edu.ar', prompt: 'select_account' }
+			}
+		});
+		if (error) errorMsg = 'Error al iniciar sesión: ' + error.message;
+	}
+
+	async function logout() {
+		await supabase.auth.signOut();
+		session = null; perfil = null; seccionesPermitidas = new Set();
+	}
+
+	// ── VISIBILIDAD ───────────────────────────────────────────
+	function esPreceptor() { return perfil?.rol === 'preceptor' || perfil?.rol === 'admin'; }
+	function puedeVerSeccion(key) { return esPreceptor() || seccionesPermitidas.has(key); }
+	function seccionesVisibles() { return SECCIONES.filter(s => puedeVerSeccion(s.key)); }
+
+	// ── CONFIG MODAL ──────────────────────────────────────────
+	async function abrirConfig() {
+		showConfig = true;
+		activeTab = 'visibilidad';
+		loadingConfig = true;
+		await Promise.all([cargarCursos(), cargarVisibilidad(), cargarAlumnos()]);
+		loadingConfig = false;
+	}
+
+	function cerrarConfig() { showConfig = false; configMsg = ''; nuevoCursoNombre = ''; }
+
+	async function cargarCursos() {
+		const { data } = await supabase.from('cursos').select('id, nombre').order('nombre');
+		cursos = data ?? [];
+	}
+
+	async function cargarAlumnos() {
+		const { data } = await supabase
+			.from('perfiles')
+			.select('id, email, curso_id, curso:curso_id(nombre)')
+			.eq('rol', 'student')
+			.order('email');
+		alumnos = data ?? [];
+	}
+
+	async function cargarVisibilidad() {
+		const { data } = await supabase.from('seccion_cursos_permitidos').select('seccion, curso_id');
+		const v = { comedor: new Set(), PP: new Set(), recreativo: new Set() };
+		(data ?? []).forEach(r => { v[r.seccion]?.add(r.curso_id); });
+		visibilidad = v;
+	}
+
+	async function togglePermiso(seccion, cursoId, habilitado) {
+		savingConfig = true;
+		if (habilitado) {
+			await supabase.from('seccion_cursos_permitidos').insert({ seccion, curso_id: cursoId });
+			visibilidad[seccion] = new Set([...visibilidad[seccion], cursoId]);
+		} else {
+			await supabase.from('seccion_cursos_permitidos').delete().eq('seccion', seccion).eq('curso_id', cursoId);
+			visibilidad[seccion] = new Set([...visibilidad[seccion]].filter(id => id !== cursoId));
+		}
+		flashMsg('Guardado');
+		savingConfig = false;
+	}
+
+	async function agregarCurso() {
+		if (!nuevoCursoNombre.trim()) return;
+		addingCurso = true;
+		const { error } = await supabase.from('cursos').insert({ nombre: nuevoCursoNombre.trim() });
+		if (error) { configMsg = 'Error: ' + error.message; }
+		else { nuevoCursoNombre = ''; await cargarCursos(); flashMsg('Curso agregado'); }
+		addingCurso = false;
+	}
+
+	async function eliminarCurso(id, nombre) {
+		if (!confirm(`¿Eliminar el curso "${nombre}"? Esto quitará los permisos y desvinculará alumnos.`)) return;
+		const { error } = await supabase.from('cursos').delete().eq('id', id);
+		if (error) { configMsg = 'Error: ' + error.message; }
+		else { await Promise.all([cargarCursos(), cargarVisibilidad(), cargarAlumnos()]); flashMsg('Curso eliminado'); }
+	}
+
+	async function asignarCurso(alumnoId, cursoId) {
+		savingAlumnos.add(alumnoId);
+		savingAlumnos = new Set(savingAlumnos);
+		await supabase.from('perfiles').update({ curso_id: cursoId || null }).eq('id', alumnoId);
+		savingAlumnos.delete(alumnoId);
+		savingAlumnos = new Set(savingAlumnos);
+		flashMsg('Alumno actualizado');
+	}
+
+	function flashMsg(msg) {
+		configMsg = msg;
+		setTimeout(() => { configMsg = ''; }, 2500);
+	}
+</script>
+
 <svelte:head>
 	<title>Plataforma de Control — Escuela Philips</title>
 </svelte:head>
 
-<div class="row justify-content-center mt-5 mb-5">
+<!-- ENCABEZADO -->
+<div class="row justify-content-center mt-5 mb-4">
 	<div class="col-md-6 text-center">
 		<img src="https://www.philips.edu.ar/favicon.png" alt="Philips" width="80" class="mb-3 shadow-sm" style="border-radius:16px;" />
 		<h1 class="fw-bold philips-text fs-1">Escuela Técnica Philips</h1>
@@ -10,63 +202,422 @@
 	</div>
 </div>
 
-<div class="row justify-content-center px-3">
-	<div class="col-md-5 col-lg-4 mb-4">
-		<div class="card glass-card h-100 p-5 text-center transition-hover" style="cursor: pointer;" onclick={() => window.location.href='/comedor'}>
-			<div class="mb-4">
-				<div class="bg-primary-subtle text-primary rounded-circle d-inline-flex p-3 mb-3 shadow-sm">
-					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-cup-hot-fill" viewBox="0 0 16 16">
-						<path fill-rule="evenodd" d="M.5 6a.5.5 0 0 0-.488.608l1.652 7.434A2.5 2.5 0 0 0 4.104 16h5.792a2.5 2.5 0 0 0 2.44-1.958l.131-.59a3 3 0 0 0 1.3-5.854l.221-.99A.5.5 0 0 0 13.5 6H.5ZM13 12.5a2.001 2.001 0 0 1-.316-.025l.867-3.898A2.001 2.001 0 0 1 13 12.5Z"/>
-						<path d="m4.4.8-.003.004-.014.019a4 4 0 0 0-.204.31 2 2 0 0 0-.141.267c-.026.06-.034.092-.037.103v.004a.6.6 0 0 0 .091.248c.075.114.243.208.521.285.45.125 1.05.21 1.714.269.055-.164.12-.34.195-.531.054-.136.115-.282.18-.43.084-.194.17-.384.246-.534.015-.03.028-.056.039-.077l.008-.014.002-.004A.6.6 0 0 0 6.9.596c-.075-.114-.243-.208-.521-.285-.45-.125-1.05-.21-1.714-.269a4.8 4.8 0 0 0-.195.531c-.054.136-.115.282-.18.43-.084.194-.17.384-.246.534a2.2 2.2 0 0 0-.039.077l-.008.014a.04.04 0 0 0-.002.004ZM7.4.8l-.003.004-.014.019a4 4 0 0 0-.204.31 2 2 0 0 0-.141.267c-.026.06-.034.092-.037.103v.004a.6.6 0 0 0 .091.248c.075.114.243.208.521.285.45.125 1.05.21 1.714.269.055-.164.12-.34.195-.531.054-.136.115-.282.18-.43.084-.194.17-.384.246-.534.015-.03.028-.056.039-.077l.008-.014.002-.004A.6.6 0 0 0 9.9.596c-.075-.114-.243-.208-.521-.285-.45-.125-1.05-.21-1.714-.269a4.8 4.8 0 0 0-.195.531c-.054.136-.115.282-.18.43-.084.194-.17.384-.246.534a2.2 2.2 0 0 0-.039.077l-.008.014a.04.04 0 0 0-.002.004ZM10.4.8l-.003.004-.014.019a4 4 0 0 0-.204.31 2 2 0 0 0-.141.267c-.026.06-.034.092-.037.103v.004a.6.6 0 0 0 .091.248c.075.114.243.208.521.285.45.125 1.05.21 1.714.269.055-.164.12-.34.195-.531.054-.136.115-.282.18-.43.084-.194.17-.384.246-.534.015-.03.028-.056.039-.077l.008-.014.002-.004A.6.6 0 0 0 12.9.596c-.075-.114-.243-.208-.521-.285-.45-.125-1.05-.21-1.714-.269a4.8 4.8 0 0 0-.195.531c-.054.136-.115.282-.18.43-.084.194-.17.384-.246.534a2.2 2.2 0 0 0-.039.077l-.008.014a.04.04 0 0 0-.002.004Z"/>
-					</svg>
-				</div>
-				<h3 class="fw-bold philips-text mb-2">Comedor</h3>
-				<p class="text-muted small mb-0">Gestión de salida e ingreso durante horario de almuerzo</p>
-			</div>
-			<button class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm">Ingresar</button>
+<!-- LOADING -->
+{#if loading}
+	<div class="row justify-content-center mt-4">
+		<div class="col-auto text-center">
+			<div class="spinner-border text-primary mb-3" role="status"></div>
+			<p class="text-muted small">Cargando tu perfil...</p>
 		</div>
 	</div>
 
-	<div class="col-md-5 col-lg-4 mb-4">
-		<div class="card glass-card h-100 p-5 text-center transition-hover" style="cursor: pointer;" onclick={() => window.location.href='/PP'}>
-			<div class="mb-4">
-				<div class="bg-primary-subtle text-primary rounded-circle d-inline-flex p-3 mb-3 shadow-sm">
-					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-briefcase-fill" viewBox="0 0 16 16">
-						<path d="M6.5 1A1.5 1.5 0 0 0 5 2.5V3H1.5A1.5 1.5 0 0 0 0 4.5v1.384l7.614 2.03a1.5 1.5 0 0 0 .772 0L16 5.884V4.5A1.5 1.5 0 0 0 14.5 3H11v-.5A1.5 1.5 0 0 0 9.5 1h-3zm0 1h3a.5.5 0 0 1 .5.5V3H6v-.5a.5.5 0 0 1 .5-.5z"/>
-						<path d="M0 12.5A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5V6.85L8.129 8.947a.5.5 0 0 1-.258 0L0 6.85v5.65z"/>
-					</svg>
-				</div>
-				<h3 class="fw-bold philips-text mb-2">Pasantías (PP)</h3>
-				<p class="text-muted small mb-0">Registro de asistencia a Prácticas Profesionalizantes</p>
+<!-- SIN SESIÓN -->
+{:else if !session}
+	{#if errorMsg}
+		<div class="row justify-content-center mb-3">
+			<div class="col-md-5">
+				<div class="alert alert-danger text-center shadow-sm border-0 rounded-3">{errorMsg}</div>
 			</div>
-			<button class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm">Ingresar</button>
+		</div>
+	{/if}
+	{#if accessDeniedMsg}
+		<div class="row justify-content-center mb-3">
+			<div class="col-md-5">
+				<div class="alert alert-warning text-center shadow-sm border-0 rounded-3">
+					<i class="bi bi-lock-fill me-2"></i>{accessDeniedMsg}
+				</div>
+			</div>
+		</div>
+	{/if}
+	<div class="row justify-content-center">
+		<div class="col-md-5">
+			<div class="card glass-card shadow-sm p-5 text-center">
+				<h4 class="fw-bold mb-4">Acceso Institucional</h4>
+				<button
+					id="btn-google-login"
+					class="btn btn-lg btn-white border shadow-sm d-flex align-items-center justify-content-center mx-auto gap-2 px-4"
+					onclick={loginGoogle}
+				>
+					<img src="https://www.google.com/favicon.ico" alt="Google" width="20" />
+					Iniciar sesión con Google
+				</button>
+				<p class="text-muted small mt-3">Usá tu cuenta institucional @philips.edu.ar</p>
+			</div>
 		</div>
 	</div>
 
-	<div class="col-md-5 col-lg-4 mb-4">
-		<div class="card glass-card h-100 p-5 text-center transition-hover" style="cursor: pointer;" onclick={() => window.location.href='/recreativo'}>
-			<div class="mb-4">
-				<div class="bg-primary-subtle text-primary rounded-circle d-inline-flex p-3 mb-3 shadow-sm">
-					<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-controller" viewBox="0 0 16 16">
-					  <path d="M11.5 6.027a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0zm-1.5 1.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1zm2.5-.5a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0zm-1.5 1.5a.5.5 0 1 0 0-1 .5.5 0 0 0 0 1zm-6.5-3h1v1h1v1h-1v1h-1v-1h-1v-1h1v-1z"/>
-					  <path d="M3.051 3.26a.5.5 0 0 1 .354-.613l1.932-.518a.5.5 0 0 1 .62.39c.655-.079 1.35-.117 2.043-.117.72 0 1.443.041 2.12.126a.5.5 0 0 1 .622-.399l1.932.518a.5.5 0 0 1 .306.729c.14.09.266.19.373.297.408.408.78 1.05 1.068 1.777.294.739.468 1.513.538 2.222.067.689-.01 1.488-.309 2.115-.226.476-.582.88-1.042 1.15-.36.213-.748.336-1.125.409a6.223 6.223 0 0 1-.954.103c-.22.007-.442.012-.676.012h-3.32c-.22 0-.441-.005-.66-.012a6.383 6.383 0 0 1-.955-.103 3.655 3.655 0 0 1-1.124-.41c-.461-.27-.817-.674-1.043-1.15-.298-.627-.375-1.426-.309-2.115.07-.71.244-1.483.538-2.222.288-.727.66-1.37 1.068-1.777a2.6 2.6 0 0 1 .374-.297zm4.949-1.018a14.707 14.707 0 0 0-3.792.428l-1.314.352c-.655.228-1.455.77-1.921 1.94-.403 1.015-.558 1.834-.633 2.597-.063.633.024 1.25.176 1.57.172.361.427.618.665.758.261.153.565.25.865.309.288.057.6.096.903.119.26.02.525.029.79.034h3.63c.266-.005.53-.014.791-.034.303-.023.614-.062.902-.12.3-.058.604-.155.865-.308.238-.14.493-.397.665-.758.152-.32.239-.937.176-1.57-.075-.763-.23-1.582-.633-2.597-.466-1.17-1.266-1.712-1.92-1.94l-1.315-.352a14.707 14.707 0 0 0-3.792-.428z"/>
-					</svg>
-				</div>
-				<h3 class="fw-bold philips-text mb-2">Recreativo</h3>
-				<p class="text-muted small mb-0">Gestión de préstamos de paletas, pelotas, etc.</p>
-			</div>
-			<button class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm">Ingresar</button>
+<!-- CON SESIÓN -->
+{:else}
+	<!-- Barra superior -->
+	<div class="row justify-content-end mb-4 px-2">
+		<div class="col-auto d-flex align-items-center gap-2">
+			{#if esPreceptor()}
+				<button
+					id="btn-config-accesos"
+					class="btn btn-outline-secondary btn-sm fw-bold d-flex align-items-center gap-2 px-3"
+					onclick={abrirConfig}
+				>
+					<i class="bi bi-gear-fill"></i> Configurar Accesos
+				</button>
+			{/if}
+			<span class="text-muted small">{session.user.email}</span>
+			<button class="btn btn-outline-danger btn-sm d-flex align-items-center gap-1" onclick={logout}>
+				<i class="bi bi-box-arrow-right"></i> Salir
+			</button>
 		</div>
+	</div>
+
+	{#if accessDeniedMsg}
+		<div class="row justify-content-center mb-3">
+			<div class="col-md-8">
+				<div class="alert alert-warning border-0 rounded-3 text-center shadow-sm">
+					<i class="bi bi-lock-fill me-2"></i>{accessDeniedMsg}
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	<!-- ALUMNO SIN CURSO -->
+	{#if perfil?.rol === 'student' && !perfil?.curso_id}
+		<div class="row justify-content-center mt-3">
+			<div class="col-md-6 text-center">
+				<div class="card glass-card p-5 border-0 shadow-sm">
+					<i class="bi bi-person-x-fill text-muted mb-3" style="font-size: 3rem;"></i>
+					<h5 class="fw-bold mb-2">Sin curso asignado</h5>
+					<p class="text-muted small mb-0">
+						Tu cuenta aún no tiene un curso asignado. Comunicate con un preceptor para que te asignen a tu curso.
+					</p>
+				</div>
+			</div>
+		</div>
+
+	{:else}
+		{@const visibles = seccionesVisibles()}
+		{#if visibles.length === 0 && perfil?.rol === 'student'}
+			<div class="row justify-content-center mt-3">
+				<div class="col-md-6 text-center">
+					<div class="card glass-card p-5 border-0 shadow-sm">
+						<i class="bi bi-slash-circle text-muted mb-3" style="font-size: 3rem;"></i>
+						<h5 class="fw-bold mb-2">Sin secciones habilitadas</h5>
+						<p class="text-muted small mb-0">
+							Tu curso (<strong>{perfil?.curso?.nombre}</strong>) aún no tiene secciones habilitadas. Consultá con un preceptor.
+						</p>
+					</div>
+				</div>
+			</div>
+		{:else}
+			<div class="row justify-content-center px-3">
+
+				{#if puedeVerSeccion('comedor')}
+				<div class="col-md-5 col-lg-4 mb-4">
+					<div class="card glass-card h-100 p-5 text-center transition-hover" style="cursor:pointer;" onclick={() => window.location.href='/comedor'} role="button" tabindex="0" onkeydown={(e) => e.key==='Enter' && (window.location.href='/comedor')}>
+						<div class="mb-4">
+							<div class="bg-primary-subtle text-primary rounded-circle d-inline-flex p-3 mb-3 shadow-sm">
+								<i class="bi bi-cup-hot-fill" style="font-size:2rem;"></i>
+							</div>
+							<h3 class="fw-bold philips-text mb-2">Comedor</h3>
+							<p class="text-muted small mb-0">Gestión de salida e ingreso durante horario de almuerzo</p>
+						</div>
+						<button class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm">Ingresar</button>
+					</div>
+				</div>
+				{/if}
+
+				{#if puedeVerSeccion('PP')}
+				<div class="col-md-5 col-lg-4 mb-4">
+					<div class="card glass-card h-100 p-5 text-center transition-hover" style="cursor:pointer;" onclick={() => window.location.href='/PP'} role="button" tabindex="0" onkeydown={(e) => e.key==='Enter' && (window.location.href='/PP')}>
+						<div class="mb-4">
+							<div class="bg-primary-subtle text-primary rounded-circle d-inline-flex p-3 mb-3 shadow-sm">
+								<i class="bi bi-briefcase-fill" style="font-size:2rem;"></i>
+							</div>
+							<h3 class="fw-bold philips-text mb-2">Pasantías (PP)</h3>
+							<p class="text-muted small mb-0">Registro de asistencia a Prácticas Profesionalizantes</p>
+						</div>
+						<button class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm">Ingresar</button>
+					</div>
+				</div>
+				{/if}
+
+				{#if puedeVerSeccion('recreativo')}
+				<div class="col-md-5 col-lg-4 mb-4">
+					<div class="card glass-card h-100 p-5 text-center transition-hover" style="cursor:pointer;" onclick={() => window.location.href='/recreativo'} role="button" tabindex="0" onkeydown={(e) => e.key==='Enter' && (window.location.href='/recreativo')}>
+						<div class="mb-4">
+							<div class="bg-primary-subtle text-primary rounded-circle d-inline-flex p-3 mb-3 shadow-sm">
+								<i class="bi bi-controller" style="font-size:2rem;"></i>
+							</div>
+							<h3 class="fw-bold philips-text mb-2">Recreativo</h3>
+							<p class="text-muted small mb-0">Gestión de préstamos de paletas, pelotas, etc.</p>
+						</div>
+						<button class="btn btn-primary fw-bold w-100 rounded-pill shadow-sm">Ingresar</button>
+					</div>
+				</div>
+				{/if}
+
+			</div>
+		{/if}
+	{/if}
+{/if}
+
+<!-- ══════════════════════════════════════════
+     MODAL DE CONFIGURACIÓN
+═══════════════════════════════════════════ -->
+{#if showConfig}
+<div class="modal-backdrop-custom" onclick={cerrarConfig} role="button" tabindex="-1" aria-label="Cerrar"></div>
+<div class="config-modal" role="dialog" aria-modal="true" aria-labelledby="config-title">
+
+	<div class="config-modal-header">
+		<h5 class="fw-bold philips-text mb-0" id="config-title">
+			<i class="bi bi-gear-fill me-2"></i>Configurar Accesos
+		</h5>
+		<button class="btn-close" onclick={cerrarConfig} aria-label="Cerrar"></button>
+	</div>
+
+	<!-- Tabs -->
+	<div class="border-bottom px-3">
+		<ul class="nav nav-tabs border-0">
+			<li class="nav-item">
+				<button
+					class="nav-link {activeTab === 'visibilidad' ? 'active fw-bold' : 'text-muted'}"
+					onclick={() => activeTab = 'visibilidad'}
+				>
+					<i class="bi bi-eye me-1"></i>Visibilidad por Sección
+				</button>
+			</li>
+			<li class="nav-item">
+				<button
+					class="nav-link {activeTab === 'alumnos' ? 'active fw-bold' : 'text-muted'}"
+					onclick={() => activeTab = 'alumnos'}
+				>
+					<i class="bi bi-people me-1"></i>Asignar Cursos a Alumnos
+				</button>
+			</li>
+		</ul>
+	</div>
+
+	<div class="config-modal-body">
+		{#if loadingConfig}
+			<div class="text-center py-5">
+				<div class="spinner-border text-primary"></div>
+				<p class="text-muted small mt-2">Cargando...</p>
+			</div>
+		{:else}
+			{#if configMsg}
+				<div class="alert alert-success border-0 py-2 small mb-3">
+					<i class="bi bi-check-circle-fill me-1"></i>{configMsg}
+				</div>
+			{/if}
+
+			<!-- ── TAB: VISIBILIDAD ── -->
+			{#if activeTab === 'visibilidad'}
+				<!-- Crear curso -->
+				<div class="mb-4">
+					<p class="text-muted small fw-bold text-uppercase mb-2">Nuevo curso</p>
+					<div class="input-group input-group-sm">
+						<input
+							type="text"
+							class="form-control"
+							placeholder="Nombre del curso (ej: 6ET)"
+							bind:value={nuevoCursoNombre}
+							onkeydown={(e) => e.key === 'Enter' && agregarCurso()}
+						/>
+						<button
+							class="btn btn-primary d-flex align-items-center gap-1"
+							onclick={agregarCurso}
+							disabled={addingCurso || !nuevoCursoNombre.trim()}
+						>
+							{#if addingCurso}
+								<span class="spinner-border spinner-border-sm"></span>
+							{:else}
+								<i class="bi bi-plus-lg"></i> Agregar
+							{/if}
+						</button>
+					</div>
+				</div>
+
+				{#if cursos.length === 0}
+					<p class="text-center text-muted small py-3">No hay cursos creados todavía.</p>
+				{:else}
+					<div class="table-responsive">
+						<table class="table table-hover align-middle mb-0 config-table">
+							<thead class="table-light text-muted small text-uppercase">
+								<tr>
+									<th class="ps-3">Curso</th>
+									{#each SECCIONES as s}
+										<th class="text-center">
+											<i class="bi {s.icon} me-1"></i>{s.label}
+										</th>
+									{/each}
+									<th class="pe-3 text-end">Acción</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each cursos as curso (curso.id)}
+									<tr>
+										<td class="ps-3 fw-bold">{curso.nombre}</td>
+										{#each SECCIONES as s}
+											<td class="text-center">
+												<div class="form-check d-flex justify-content-center mb-0">
+													<input
+														class="form-check-input"
+														type="checkbox"
+														id="perm-{s.key}-{curso.id}"
+														checked={visibilidad[s.key]?.has(curso.id) ?? false}
+														disabled={savingConfig}
+														onchange={(e) => togglePermiso(s.key, curso.id, e.target.checked)}
+													/>
+												</div>
+											</td>
+										{/each}
+										<td class="pe-3 text-end">
+											<button
+												class="btn btn-sm btn-outline-danger"
+												onclick={() => eliminarCurso(curso.id, curso.nombre)}
+												title="Eliminar curso"
+											>
+												<i class="bi bi-trash"></i>
+											</button>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<p class="text-muted small mt-2 mb-0">Los cambios se guardan al tildar/destildar.</p>
+				{/if}
+
+			<!-- ── TAB: ALUMNOS ── -->
+			{:else if activeTab === 'alumnos'}
+				{#if alumnos.length === 0}
+					<p class="text-center text-muted small py-4">No hay alumnos registrados aún.</p>
+				{:else}
+					<!-- Barra de búsqueda + filtro -->
+					<div class="d-flex gap-2 mb-3 flex-wrap align-items-center">
+						<div class="input-group input-group-sm flex-grow-1" style="min-width: 200px;">
+							<span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+							<input
+								type="text"
+								class="form-control border-start-0"
+								placeholder="Buscar por email..."
+								bind:value={alumnoFiltro}
+							/>
+						</div>
+						<div class="form-check form-check-inline mb-0">
+							<input
+								class="form-check-input"
+								type="checkbox"
+								id="filtro-sin-curso"
+								bind:checked={soloSinCurso}
+							/>
+							<label class="form-check-label small" for="filtro-sin-curso">
+								Sin curso asignado
+							</label>
+						</div>
+					</div>
+
+					{@const alumnosFiltrados = alumnos.filter(a =>
+						a.email.toLowerCase().includes(alumnoFiltro.toLowerCase()) &&
+						(!soloSinCurso || !a.curso_id)
+					)}
+
+					{#if alumnosFiltrados.length === 0}
+						<p class="text-center text-muted small py-3">No se encontraron alumnos con esos criterios.</p>
+					{:else}
+						<div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
+							<table class="table table-hover align-middle mb-0 config-table">
+								<thead class="table-light text-muted small text-uppercase sticky-top">
+									<tr>
+										<th class="ps-3">Email</th>
+										<th class="pe-3">Curso asignado</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each alumnosFiltrados as alumno (alumno.id)}
+										<tr>
+											<td class="ps-3 small">
+												{alumno.email}
+												{#if !alumno.curso_id}
+													<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-1" style="font-size:.65rem;">Sin curso</span>
+												{/if}
+											</td>
+											<td class="pe-3">
+												<select
+													class="form-select form-select-sm"
+													style="max-width: 200px;"
+													bind:value={alumno.curso_id}
+													onchange={() => asignarCurso(alumno.id, alumno.curso_id)}
+													disabled={savingAlumnos.has(alumno.id)}
+												>
+													<option value={null}>Sin curso</option>
+													{#each cursos as c}
+														<option value={c.id}>{c.nombre}</option>
+													{/each}
+												</select>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+						<p class="text-muted small mt-2 mb-0">
+							Mostrando {alumnosFiltrados.length} de {alumnos.length} alumnos. Los cambios se guardan al seleccionar.
+						</p>
+					{/if}
+				{/if}
+			{/if}
+		{/if}
 	</div>
 </div>
+{/if}
 
 <style>
-	.transition-hover {
-		transition: all 0.3s ease;
-	}
+	.transition-hover { transition: all 0.3s ease; }
 	.transition-hover:hover {
 		transform: translateY(-8px);
 		box-shadow: 0 12px 40px rgba(11, 94, 170, 0.15) !important;
 		border-color: rgba(11, 94, 170, 0.3);
 	}
+
+	.modal-backdrop-custom {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.45);
+		z-index: 1040;
+		cursor: pointer;
+	}
+
+	.config-modal {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 1050;
+		background: #fff;
+		border-radius: 1rem;
+		box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+		width: min(92vw, 740px);
+		max-height: 88vh;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.config-modal-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 1.25rem 1.5rem;
+		border-bottom: 1px solid #e9ecef;
+		flex-shrink: 0;
+	}
+
+	.config-modal-body {
+		padding: 1.25rem 1.5rem;
+		overflow-y: auto;
+		flex: 1;
+	}
+
+	.config-table th, .config-table td { padding: 0.6rem 0.5rem; }
+
+	.nav-link { border: none; background: none; padding: 0.65rem 1rem; cursor: pointer; }
+	.nav-link.active { border-bottom: 2px solid #0B5EAA; color: #0B5EAA; }
 </style>
