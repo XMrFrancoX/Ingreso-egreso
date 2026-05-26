@@ -82,12 +82,14 @@
 	}
 
 	async function cargarSeccionesPermitidas(cursoId) {
-		if (!cursoId) { seccionesPermitidas = new Set(); return; }
+		// Recreativo siempre está disponible para alumnos, tengan o no curso asignado
+		const base = new Set(['recreativo']);
+		if (!cursoId) { seccionesPermitidas = base; return; }
 		const { data } = await supabase
 			.from('seccion_cursos_permitidos')
 			.select('seccion')
 			.eq('curso_id', cursoId);
-		seccionesPermitidas = new Set((data ?? []).map(r => r.seccion));
+		seccionesPermitidas = new Set([...base, ...(data ?? []).map(r => r.seccion)]);
 	}
 
 	// ── AUTH ──────────────────────────────────────────────────
@@ -277,36 +279,32 @@
 		</div>
 	{/if}
 
-	<!-- ALUMNO SIN CURSO -->
-	{#if perfil?.rol === 'student' && !perfil?.curso_id}
+	{@const visibles = seccionesVisibles()}
+	{#if visibles.length === 0 && perfil?.rol === 'student'}
+
 		<div class="row justify-content-center mt-3">
 			<div class="col-md-6 text-center">
 				<div class="card glass-card p-5 border-0 shadow-sm">
-					<i class="bi bi-person-x-fill text-muted mb-3" style="font-size: 3rem;"></i>
-					<h5 class="fw-bold mb-2">Sin curso asignado</h5>
+					<i class="bi bi-slash-circle text-muted mb-3" style="font-size: 3rem;"></i>
+					<h5 class="fw-bold mb-2">Sin secciones habilitadas</h5>
 					<p class="text-muted small mb-0">
-						Tu cuenta aún no tiene un curso asignado. Comunicate con un preceptor para que te asignen a tu curso.
+						Tu curso (<strong>{perfil?.curso?.nombre}</strong>) aún no tiene secciones habilitadas. Consultá con un preceptor.
 					</p>
 				</div>
 			</div>
 		</div>
-
 	{:else}
-		{@const visibles = seccionesVisibles()}
-		{#if visibles.length === 0 && perfil?.rol === 'student'}
-			<div class="row justify-content-center mt-3">
-				<div class="col-md-6 text-center">
-					<div class="card glass-card p-5 border-0 shadow-sm">
-						<i class="bi bi-slash-circle text-muted mb-3" style="font-size: 3rem;"></i>
-						<h5 class="fw-bold mb-2">Sin secciones habilitadas</h5>
-						<p class="text-muted small mb-0">
-							Tu curso (<strong>{perfil?.curso?.nombre}</strong>) aún no tiene secciones habilitadas. Consultá con un preceptor.
-						</p>
+		{#if perfil?.rol === 'student' && !perfil?.curso_id}
+			<div class="row justify-content-center mb-3">
+				<div class="col-md-8">
+					<div class="alert alert-info border-0 rounded-3 text-center shadow-sm py-2">
+						<i class="bi bi-info-circle-fill me-2"></i>
+						Tu cuenta no tiene curso asignado aún. Por ahora podés usar <strong>Recreativo</strong>. Comunicate con un preceptor para que te asignen a tu curso.
 					</div>
 				</div>
 			</div>
-		{:else}
-			<div class="row justify-content-center px-3">
+		{/if}
+		<div class="row justify-content-center px-3">
 
 				{#if puedeVerSeccion('comedor')}
 				<div class="col-md-5 col-lg-4 mb-4">
@@ -353,8 +351,7 @@
 				</div>
 				{/if}
 
-			</div>
-		{/if}
+		</div>
 	{/if}
 {/if}
 
