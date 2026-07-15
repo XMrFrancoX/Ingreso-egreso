@@ -1,6 +1,9 @@
 <script>
 	import { onMount, onDestroy } from 'svelte';
 	import QRCode from 'qrcode';
+	import * as XLSX from 'xlsx';
+	import jsPDF from 'jspdf';
+	import autoTable from 'jspdf-autotable';
 	import { supabase } from '$lib/supabaseClient';
 	import { goto } from '$app/navigation';
 
@@ -50,8 +53,26 @@
 	// Confirmación eliminación
 	let confirmDelete = $state(null); // { tipo: 'empresa'|'alumno'|'precarga', id, nombre }
 
+	// Gestión de roles
+	let usuarios = $state([]);
+	let usuarioFiltro = $state('');
+	let savingRol = $state(new Set());
+
+	// Precarga de rol (preceptor/admin) para emails que aún no iniciaron sesión
+	let rolesPrecargados = $state([]);
+	let precargaRolEmail = $state('');
+	let precargaRolValor = $state('preceptor');
+	let addingPrecargaRol = $state(false);
+
+	// Reporte de registros por rango de fechas
+	let reporteDesde = $state(new Date().toLocaleDateString('en-CA'));
+	let reporteHasta = $state(new Date().toLocaleDateString('en-CA'));
+	let generandoReporte = $state(false);
+
 	const TODOS_DIAS = ['L', 'M', 'X', 'J', 'V'];
 	const DIAS_NOMBRE = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
+	const ROLES = ['student', 'preceptor', 'admin'];
+	const ROL_NOMBRE = { student: 'Alumno', preceptor: 'Preceptor', admin: 'Admin' };
 
 		function fmtHora(t) { return t ? t.substring(0, 5) : '—'; }
 
@@ -93,6 +114,8 @@
 			isAdmin ? cargarAlumnos() : Promise.resolve(),
 			isAdmin ? cargarEmpresas() : Promise.resolve(),
 			isAdmin ? cargarPrecargados() : Promise.resolve(),
+			isAdmin ? cargarUsuarios() : Promise.resolve(),
+			isAdmin ? cargarRolesPrecargados() : Promise.resolve(),
 			cargarRegistros()
 		]);
 
@@ -178,6 +201,222 @@
 			empresa_nombre: p.empresa?.nombre ?? '—',
 			dias: p.alumnos_precargados_dias?.map(d => d.dia) ?? []
 		}));
+	}
+
+	async function cargarUsuarios() {
+		const { data, error } = await supabase
+			.from('perfiles')
+			.select('id, email, rol')
+			.order('email');
+		if (error) { console.error(error); return; }
+		usuarios = data ?? [];
+	}
+
+	async function actualizarRol(usuario, nuevoRol) {
+		if (usuario.id === session.user.id) {
+			errorMsg = 'No podés cambiar tu propio rol desde acá.';
+			return;
+		}
+		const rolAnterior = usuario.rol;
+		savingRol.add(usuario.id);
+		savingRol = new Set(savingRol);
+		errorMsg = '';
+
+		const { data, error } = await supabase
+			.from('perfiles')
+			.update({ rol: nuevoRol })
+			.eq('id', usuario.id)
+			.select();
+
+		if (error || !data || data.length === 0) {
+			errorMsg = 'Error al cambiar el rol: ' + (error?.message ?? 'Sin permisos (RLS).');
+			usuario.rol = rolAnterior;
+		} else {
+			usuario.rol = nuevoRol;
+			showSuccess(`✓ ${usuario.email} ahora es ${ROL_NOMBRE[nuevoRol]}`);
+		}
+
+		savingRol.delete(usuario.id);
+		savingRol = new Set(savingRol);
+	}
+
+	async function cargarRolesPrecargados() {
+		const { data, error } = await supabase
+			.from('roles_precargados')
+			.select('id, email, rol')
+			.order('email');
+		if (error) { console.error(error); return; }
+		rolesPrecargados = data ?? [];
+	}
+
+	async function agregarPrecargaRol() {
+		if (!precargaRolEmail.trim()) { errorMsg = 'Ingresá un email válido.'; return; }
+		addingPrecargaRol = true;
+		errorMsg = '';
+		const email = precargaRolEmail.trim().toLowerCase();
+
+		const { error } = await supabase
+			.from('roles_precargados')
+			.upsert({ email, rol: precargaRolValor }, { onConflict: 'email' });
+
+		if (error) {
+			errorMsg = 'Error al precargar el rol: ' + error.message;
+		} else {
+			precargaRolEmail = '';
+			precargaRolValor = 'preceptor';
+			await cargarRolesPrecargados();
+			showSuccess('✓ Rol precargado correctamente');
+		}
+		addingPrecargaRol = false;
+	}
+
+	async function eliminarPrecargaRol(p) {
+		const { data, error } = await supabase.from('roles_precargados').delete().eq('id', p.id).select();
+		if (error || !data || data.length === 0) {
+			errorMsg = 'Error al eliminar la precarga: ' + (error?.message ?? 'Sin permisos (RLS).');
+		} else {
+			await cargarRolesPrecargados();
+			showSuccess('✓ Precarga de rol eliminada');
+		}
+	}
+
+	function rangoReporteHoy() {
+		const hoy = new Date().toLocaleDateString('en-CA');
+		reporteDesde = hoy;
+		reporteHasta = hoy;
+	}
+
+	function rangoReporteSemana() {
+		const hoy = new Date();
+		const offset = hoy.getDay() === 0 ? 6 : hoy.getDay() - 1;
+		const lunes = new Date(hoy);
+		lunes.setDate(hoy.getDate() - offset);
+		reporteDesde = lunes.toLocaleDateString('en-CA');
+		reporteHasta = hoy.toLocaleDateString('en-CA');
+	}
+
+	function rangoReporteMes() {
+		const hoy = new Date();
+		reporteDesde = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toLocaleDateString('en-CA');
+		reporteHasta = hoy.toLocaleDateString('en-CA');
+	}
+
+	async function obtenerRegistrosRango() {
+		const { data, error } = await supabase
+			.from('registros')
+			.select(`id, fecha, hora_entrada_real, perfil:perfil_id ( email, horario_entrada, empresa:empresa_id ( nombre ) )`)
+			.gte('fecha', reporteDesde)
+			.lte('fecha', reporteHasta)
+			.order('fecha')
+			.order('hora_entrada_real');
+
+		if (error) { errorMsg = 'Error al generar el reporte: ' + error.message; return null; }
+		return data ?? [];
+	}
+
+	async function exportarReporteExcel() {
+		generandoReporte = true;
+		errorMsg = '';
+		const data = await obtenerRegistrosRango();
+		generandoReporte = false;
+		if (!data) return;
+		if (data.length === 0) { errorMsg = 'No hay registros en ese rango de fechas.'; return; }
+
+		const filas = data.map(r => ({
+			Fecha: r.fecha,
+			Alumno: r.perfil?.email ?? '—',
+			Empresa: r.perfil?.empresa?.nombre ?? '—',
+			'Horario asignado': fmtHora(r.perfil?.horario_entrada),
+			'Entrada real': fmtHora(r.hora_entrada_real),
+			Estado: fmtDiferencia(r.hora_entrada_real, r.perfil?.horario_entrada)?.texto ?? 'En Escuela'
+		}));
+		const ws = XLSX.utils.json_to_sheet(filas);
+		ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 18 }];
+		const wb = XLSX.utils.book_new();
+		XLSX.utils.book_append_sheet(wb, ws, 'Registros');
+		XLSX.writeFile(wb, `Registros_PP_${reporteDesde}_a_${reporteHasta}.xlsx`);
+		showSuccess(`✓ ${data.length} registro(s) exportado(s)`);
+	}
+
+	async function exportarReportePDF() {
+		generandoReporte = true;
+		errorMsg = '';
+		const data = await obtenerRegistrosRango();
+		generandoReporte = false;
+		if (!data) return;
+		if (data.length === 0) { errorMsg = 'No hay registros en ese rango de fechas.'; return; }
+
+		const doc = new jsPDF();
+		doc.setFontSize(14);
+		doc.text('Registro de Pasantías (PP) — Reporte', 14, 15);
+		doc.setFontSize(9);
+		doc.setTextColor(120);
+		doc.text(`Escuela Philips — Del ${reporteDesde} al ${reporteHasta}`, 14, 21);
+
+		autoTable(doc, {
+			startY: 26,
+			head: [['Fecha', 'Alumno', 'Empresa', 'Asignado', 'Entrada real', 'Estado']],
+			body: data.map(r => [
+				r.fecha,
+				r.perfil?.email ?? '—',
+				r.perfil?.empresa?.nombre ?? '—',
+				fmtHora(r.perfil?.horario_entrada),
+				fmtHora(r.hora_entrada_real),
+				fmtDiferencia(r.hora_entrada_real, r.perfil?.horario_entrada)?.texto ?? 'En Escuela'
+			]),
+			headStyles: { fillColor: [11, 94, 170] },
+			styles: { fontSize: 8 }
+		});
+
+		doc.save(`Registros_PP_${reporteDesde}_a_${reporteHasta}.pdf`);
+		showSuccess(`✓ ${data.length} registro(s) exportado(s)`);
+	}
+
+	function exportarExcel() {
+		const filas = alumnos.map(a => ({
+			Email: a.email,
+			Empresa: a.empresa?.nombre ?? 'Sin asignar',
+			'Horario de entrada': fmtHora(a.horario_entrada),
+			Lunes: a.dias.includes('L') ? 'Sí' : '',
+			Martes: a.dias.includes('M') ? 'Sí' : '',
+			Miércoles: a.dias.includes('X') ? 'Sí' : '',
+			Jueves: a.dias.includes('J') ? 'Sí' : '',
+			Viernes: a.dias.includes('V') ? 'Sí' : ''
+		}));
+		const ws = XLSX.utils.json_to_sheet(filas);
+		ws['!cols'] = [{ wch: 28 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 8 }];
+		const wb = XLSX.utils.book_new();
+		XLSX.utils.book_append_sheet(wb, ws, 'PP');
+		XLSX.writeFile(wb, `Planilla_PP_${selectedDate}.xlsx`);
+	}
+
+	function exportarPDF() {
+		const doc = new jsPDF();
+		doc.setFontSize(14);
+		doc.text('Planilla de Pasantías (PP) — Resumen', 14, 15);
+		doc.setFontSize(9);
+		doc.setTextColor(120);
+		doc.text(`Escuela Philips — Generado el ${new Date().toLocaleDateString('es-AR')}`, 14, 21);
+
+		autoTable(doc, {
+			startY: 26,
+			head: [['Email', 'Empresa', 'Horario entrada', 'L', 'M', 'X', 'J', 'V']],
+			body: alumnos.map(a => [
+				a.email,
+				a.empresa?.nombre ?? 'Sin asignar',
+				fmtHora(a.horario_entrada),
+				a.dias.includes('L') ? '✓' : '',
+				a.dias.includes('M') ? '✓' : '',
+				a.dias.includes('X') ? '✓' : '',
+				a.dias.includes('J') ? '✓' : '',
+				a.dias.includes('V') ? '✓' : ''
+			]),
+			headStyles: { fillColor: [11, 94, 170] },
+			styles: { fontSize: 9 },
+			columnStyles: { 3: { halign: 'center' }, 4: { halign: 'center' }, 5: { halign: 'center' }, 6: { halign: 'center' }, 7: { halign: 'center' } }
+		});
+
+		doc.save(`Planilla_PP_${selectedDate}.pdf`);
 	}
 
 	async function cargarRegistros() {
@@ -504,6 +743,127 @@
 	</div>
 </div>
 
+<!-- Gestión de Roles -->
+<div class="card glass-card mb-4 overflow-hidden">
+	<div class="p-4 border-bottom">
+		<h5 class="fw-bold mb-0">Gestión de Roles</h5>
+		<p class="text-muted small mb-0">Asigná el rol de administrador (u otro) a cualquier usuario registrado.</p>
+	</div>
+
+	<div class="p-4 border-bottom bg-light bg-opacity-50">
+		<input
+			type="text"
+			class="form-control form-control-sm"
+			style="max-width: 320px;"
+			placeholder="Buscar por email..."
+			bind:value={usuarioFiltro}
+		/>
+	</div>
+
+	{#if usuarios.length === 0}
+		<div class="p-4 text-center text-muted small fst-italic">No hay usuarios registrados.</div>
+	{:else}
+		{@const usuariosFiltrados = usuarios.filter(u => u.email.toLowerCase().includes(usuarioFiltro.toLowerCase()))}
+		{#if usuariosFiltrados.length === 0}
+			<div class="p-4 text-center text-muted small fst-italic">Sin resultados para "{usuarioFiltro}".</div>
+		{:else}
+			<div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
+				<table class="table table-hover mb-0 align-middle">
+					<thead class="table-light text-muted small text-uppercase sticky-top">
+						<tr>
+							<th class="ps-4">Email</th>
+							<th>Rol</th>
+							<th class="pe-4">Cambiar rol</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each usuariosFiltrados as usuario (usuario.id)}
+							<tr>
+								<td class="ps-4">
+									<span class="fw-medium text-dark small">{usuario.email}</span>
+									{#if usuario.id === session.user.id}
+										<span class="badge bg-light text-muted border ms-2" style="font-size:.68rem;">Vos</span>
+									{/if}
+								</td>
+								<td>
+									<span class="badge {usuario.rol === 'admin' ? 'bg-danger-subtle text-danger border-danger-subtle' : usuario.rol === 'preceptor' ? 'bg-info-subtle text-info-emphasis border-info-subtle' : 'bg-light text-dark border'} border">
+										{ROL_NOMBRE[usuario.rol] ?? usuario.rol}
+									</span>
+								</td>
+								<td class="pe-4">
+									<div class="d-flex align-items-center gap-2">
+										<select
+											class="form-select form-select-sm"
+											style="max-width: 160px;"
+											value={usuario.rol}
+											disabled={usuario.id === session.user.id || savingRol.has(usuario.id)}
+											onchange={(e) => actualizarRol(usuario, e.target.value)}
+										>
+											{#each ROLES as r}
+												<option value={r}>{ROL_NOMBRE[r]}</option>
+											{/each}
+										</select>
+										{#if savingRol.has(usuario.id)}
+											<span class="spinner-border spinner-border-sm text-primary"></span>
+										{/if}
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	{/if}
+
+	<!-- Precarga de rol para emails que aún no iniciaron sesión -->
+	<div class="p-4 border-top bg-light bg-opacity-50">
+		<p class="fw-semibold mb-1">Precargar rol para un email nuevo</p>
+		<p class="text-muted small mb-3">Si el usuario todavía no inició sesión nunca, precargá acá su rol (preceptor o admin). Se le aplica automáticamente la primera vez que entre con Google.</p>
+		<div class="row g-3 align-items-end">
+			<div class="col-md-5">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Email de Google</label>
+				<input
+					type="email"
+					class="form-control form-control-sm"
+					placeholder="preceptor@philips.edu.ar"
+					bind:value={precargaRolEmail}
+					onkeydown={(e) => e.key === 'Enter' && agregarPrecargaRol()}
+				/>
+			</div>
+			<div class="col-md-3">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Rol</label>
+				<select class="form-select form-select-sm" bind:value={precargaRolValor}>
+					<option value="preceptor">Preceptor</option>
+					<option value="admin">Admin</option>
+				</select>
+			</div>
+			<div class="col-md-2">
+				<button class="btn btn-success btn-sm w-100 fw-semibold" onclick={agregarPrecargaRol} disabled={addingPrecargaRol}>
+					{#if addingPrecargaRol}<span class="spinner-border spinner-border-sm"></span>{:else}+ Agregar{/if}
+				</button>
+			</div>
+		</div>
+
+		{#if rolesPrecargados.length > 0}
+			<div class="d-flex flex-wrap gap-2 mt-3">
+				{#each rolesPrecargados as p (p.id)}
+					<span class="badge bg-white text-dark border rounded-pill px-3 py-2 d-flex align-items-center gap-2">
+						{p.email} → {ROL_NOMBRE[p.rol] ?? p.rol}
+						<button
+							class="btn-close btn-close-sm ms-1"
+							style="font-size:.6rem;"
+							title="Eliminar precarga"
+							onclick={() => eliminarPrecargaRol(p)}
+							aria-label="Eliminar precarga de {p.email}"
+						></button>
+					</span>
+				{/each}
+			</div>
+		{/if}
+	</div>
+</div>
+
 <!-- Precarga de Alumnos -->
 <div class="card glass-card mb-4 overflow-hidden">
 	<div class="p-4 border-bottom">
@@ -602,9 +962,21 @@
 
 <!-- Alumnos registrados -->
 <div class="card glass-card mb-4 overflow-hidden">
-	<div class="p-4 border-bottom">
-		<h5 class="fw-bold mb-0">Alumnos Registrados</h5>
-		<p class="text-muted small mb-0">Alumnos que ya iniciaron sesión. Asigná empresa, horario y días.</p>
+	<div class="p-4 border-bottom d-flex align-items-center justify-content-between flex-wrap gap-2">
+		<div>
+			<h5 class="fw-bold mb-0">Alumnos Registrados</h5>
+			<p class="text-muted small mb-0">Alumnos que ya iniciaron sesión. Asigná empresa, horario y días.</p>
+		</div>
+		{#if alumnos.length > 0}
+			<div class="d-flex gap-2">
+				<button class="btn btn-outline-success btn-sm fw-semibold" onclick={exportarExcel} title="Exportar planilla en Excel">
+					<i class="bi bi-file-earmark-excel me-1"></i>Excel
+				</button>
+				<button class="btn btn-outline-danger btn-sm fw-semibold" onclick={exportarPDF} title="Exportar planilla en PDF">
+					<i class="bi bi-file-earmark-pdf me-1"></i>PDF
+				</button>
+			</div>
+		{/if}
 	</div>
 
 	{#if alumnos.length === 0}
@@ -678,6 +1050,39 @@
 	{/if}
 </div>
 {/if}
+
+<!-- Reporte de Registros por rango de fechas -->
+<div class="card glass-card mb-4 overflow-hidden">
+	<div class="p-4 border-bottom">
+		<h5 class="fw-bold mb-0">Descargar Reporte de Registros</h5>
+		<p class="text-muted small mb-0">Elegí un rango de fechas y descargá el registro de ingresos (quién entró, qué día y a qué hora) en Excel o PDF.</p>
+	</div>
+	<div class="p-4">
+		<div class="d-flex flex-wrap gap-2 mb-3">
+			<button class="btn btn-outline-secondary btn-sm fw-semibold" onclick={rangoReporteHoy}>Hoy</button>
+			<button class="btn btn-outline-secondary btn-sm fw-semibold" onclick={rangoReporteSemana}>Esta semana</button>
+			<button class="btn btn-outline-secondary btn-sm fw-semibold" onclick={rangoReporteMes}>Este mes</button>
+		</div>
+		<div class="row g-3 align-items-end mb-3">
+			<div class="col-auto">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Desde</label>
+				<input type="date" class="form-control form-control-sm" bind:value={reporteDesde} />
+			</div>
+			<div class="col-auto">
+				<label class="form-label small fw-semibold text-muted text-uppercase" style="font-size:.75rem;">Hasta</label>
+				<input type="date" class="form-control form-control-sm" bind:value={reporteHasta} />
+			</div>
+		</div>
+		<div class="d-flex gap-2">
+			<button class="btn btn-outline-success btn-sm fw-semibold" onclick={exportarReporteExcel} disabled={generandoReporte}>
+				{#if generandoReporte}<span class="spinner-border spinner-border-sm me-1"></span>{:else}<i class="bi bi-file-earmark-excel me-1"></i>{/if}Excel
+			</button>
+			<button class="btn btn-outline-danger btn-sm fw-semibold" onclick={exportarReportePDF} disabled={generandoReporte}>
+				{#if generandoReporte}<span class="spinner-border spinner-border-sm me-1"></span>{:else}<i class="bi bi-file-earmark-pdf me-1"></i>{/if}PDF
+			</button>
+		</div>
+	</div>
+</div>
 
 <!-- Registros del día -->
 <div class="card glass-card overflow-hidden">

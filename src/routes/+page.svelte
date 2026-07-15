@@ -77,8 +77,35 @@
 			return;
 		}
 
+		await aplicarPrecargaRol(userSession, data);
+
 		perfil = data;
 		if (data.rol === 'student') await cargarSeccionesPermitidas(data.curso_id);
+	}
+
+	// Si un admin precargó un rol (preceptor/admin) para este email antes de que
+	// existiera la cuenta, se aplica acá y se consume (la borra) el propio trigger de DB.
+	async function aplicarPrecargaRol(userSession, perfilData) {
+		const { data: precarga } = await supabase
+			.from('roles_precargados')
+			.select('rol')
+			.eq('email', userSession.user.email)
+			.maybeSingle();
+
+		if (!precarga || precarga.rol === perfilData.rol) return;
+
+		const { data: actualizado, error } = await supabase
+			.from('perfiles')
+			.update({ rol: precarga.rol })
+			.eq('id', userSession.user.id)
+			.select('rol')
+			.maybeSingle();
+
+		if (error || !actualizado) {
+			console.error('Error aplicando precarga de rol:', error);
+			return;
+		}
+		perfilData.rol = actualizado.rol;
 	}
 
 	async function cargarSeccionesPermitidas(cursoId) {

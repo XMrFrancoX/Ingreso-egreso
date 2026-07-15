@@ -25,6 +25,9 @@
 	"dependencies": {
 		"@supabase/supabase-js": "^2.104.0",
 		"html5-qrcode": "^2.3.8",
-		"qrcode": "^1.5.4"
+		"jspdf": "^4.2.1",
+		"jspdf-autotable": "^5.0.8",
+		"qrcode": "^1.5.4",
+		"xlsx": "^0.18.5"
 	}
 }
