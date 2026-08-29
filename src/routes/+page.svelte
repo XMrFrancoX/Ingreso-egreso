@@ -63,7 +63,7 @@
 	});
 
 	async function cargarPerfil(userSession, retries = 3) {
-		const { data, error } = await supabase
+		let { data, error } = await supabase
 			.from('perfiles')
 			.select('rol, curso_id, curso:curso_id(nombre)')
 			.eq('id', userSession.user.id)
@@ -74,7 +74,17 @@
 				await new Promise(r => setTimeout(r, 1000));
 				return cargarPerfil(userSession, retries - 1);
 			}
-			return;
+			// Auto-heal: el trigger handle_new_user no creó el perfil (o un backfill
+			// viejo lo salteó). Lo creamos acá — la RLS lo permite (perfiles_insert_own:
+			// auth.uid() = id). Sin esto el usuario queda en un callejón sin salida: el
+			// home no le muestra ninguna sección y /PP lo rebota al inicio.
+			const { data: creado } = await supabase
+				.from('perfiles')
+				.upsert({ id: userSession.user.id, email: userSession.user.email, rol: 'student' }, { onConflict: 'id' })
+				.select('rol, curso_id, curso:curso_id(nombre)')
+				.maybeSingle();
+			if (!creado) return;
+			data = creado;
 		}
 
 		await aplicarPrecargaRol(userSession, data);

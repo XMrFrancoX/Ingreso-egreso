@@ -8,7 +8,7 @@
 	async function checkAccesoYRedirigir(userSession, retries = 3) {
 		if (!userSession) return;
 
-		const { data, error } = await supabase
+		let { data, error } = await supabase
 			.from('perfiles')
 			.select('rol, curso_id')
 			.eq('id', userSession.user.id)
@@ -19,8 +19,14 @@
 				await new Promise(r => setTimeout(r, 1000));
 				return checkAccesoYRedirigir(userSession, retries - 1);
 			}
-			goto('/');
-			return;
+			// Auto-heal: crear el perfil faltante en vez de rebotar al inicio.
+			const { data: creado } = await supabase
+				.from('perfiles')
+				.upsert({ id: userSession.user.id, email: userSession.user.email, rol: 'student' }, { onConflict: 'id' })
+				.select('rol, curso_id')
+				.maybeSingle();
+			if (!creado) { goto('/'); return; }
+			data = creado;
 		}
 
 		// Preceptor/admin: acceso directo
