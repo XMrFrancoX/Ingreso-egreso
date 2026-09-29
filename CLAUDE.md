@@ -1,5 +1,5 @@
 ## Memoria persistente (Cerebrus)
-Path: C:\Users\franc\Documents\cerebrus
+Path: /home/fran/cerebrus
 
 Este proyecto reporta a un wiki central que trackea actividad entre todos los proyectos de Franco.
 
