@@ -1,214 +1,185 @@
-<script>
-	import { Html5Qrcode } from 'html5-qrcode';
-	import { onMount, onDestroy } from 'svelte';
-    import { supabase } from '$lib/supabaseClient';
-    import { goto } from '$app/navigation';
-	
-	let session = $state(null);
-	let loading = $state(true);
-	
-	let qrVerified = $state(false);
-	let html5QrCode;
-	let cameraError = $state('');
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
+	import { supabase } from '$lib/supabase';
+	import { auth } from '$lib/auth.svelte';
+	import { confirmDialog } from '$lib/utils/confirm';
+	import { fmtFecha, fmtHora, hoyISO, horaAhora } from '$lib/fechas';
+	import * as Card from '$lib/components/ui/card/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
+	import EscanearQr from '$lib/components/EscanearQr.svelte';
+	import { Check, CornerDownLeft, LoaderCircle, PackageOpen } from '@lucide/svelte';
+	import { cn } from '$lib/utils/cn.js';
 
-    let items = $state([]);
-    let selectedItemIds = $state([]);
-    let pendingMovimientos = $state([]);
+	type Item = { id: string; nombre: string };
+	type Prestamo = { id: string; fecha: string; hora_retiro: string; item: { nombre: string } | null };
 
-	let timeOffset = 0;
+	let items = $state<Item[]>([]);
+	let prestamos = $state<Prestamo[]>([]);
+	let cargando = $state(true);
+	let qrValidado = $state(false);
+	let elegidos = $state<string[]>([]);
+	let retirando = $state(false);
+	let devolviendo = $state<string | null>(null);
 
-	async function syncTime() {
-		try {
-			const res = await fetch(window.location.origin + '/?_t=' + Date.now(), { method: 'HEAD' });
-			const dateStr = res.headers.get('Date');
-			if (dateStr) {
-				timeOffset = new Date(dateStr).getTime() - Date.now();
-			}
-		} catch (e) {
-			console.warn('Error sincronizando hora:', e);
-		}
+	async function cargar() {
+		const [it, pr] = await Promise.all([
+			supabase.from('recreativo_items').select('id, nombre').eq('activo', true).order('nombre'),
+			supabase
+				.from('recreativo_movimientos')
+				.select('id, fecha, hora_retiro, item:item_id(nombre)')
+				.eq('perfil_id', auth.perfil!.id)
+				.is('hora_devolucion', null)
+				.order('fecha', { ascending: false })
+				.order('hora_retiro', { ascending: false })
+		]);
+		if (it.error || pr.error) toast.error('No se pudieron cargar los datos. Probá recargar.');
+		items = it.data ?? [];
+		prestamos = (pr.data as Prestamo[] | null) ?? [];
+		cargando = false;
 	}
 
-	onMount(async () => {
-        const { data } = await supabase.auth.getSession();
-        session = data.session;
-        if (!session) {
-            goto('/');
-            return;
-        }
+	onMount(cargar);
 
-		await syncTime();
-        await Promise.all([cargarItems(), loadMisPendientes()]);
-		
-		if (!qrVerified) {
-			setTimeout(startScanner, 500);
-		}
-	});
-
-	onDestroy(async () => {
-		if (html5QrCode && html5QrCode.isScanning) {
-			await html5QrCode.stop().catch(e => console.error(e));
-		}
-	});
-
-    async function cargarItems() {
-        const { data, error } = await supabase
-            .from('recreativo_items')
-            .select('id, nombre')
-            .eq('activo', true)
-            .order('nombre');
-        if (!error) items = data;
-    }
-
-    async function loadMisPendientes() {
-        loading = true;
-        const { data, error } = await supabase
-            .from('recreativo_movimientos')
-            .select('*, item:item_id(nombre)')
-            .eq('perfil_id', session.user.id)
-            .is('hora_devolucion', null)
-            .order('fecha', { ascending: false });
-        if (!error) pendingMovimientos = data;
-        loading = false;
-    }
-
-	async function startScanner() {
-		if (html5QrCode) return;
-        
-        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
-            cameraError = '⚠️ Error de Seguridad: El acceso a la cámara requiere HTTPS.';
-            return;
-        }
-
-		html5QrCode = new Html5Qrcode("qr-reader");
-        
-        try {
-            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-            await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess);
-        } catch (err) {
-            console.error("No se pudo iniciar la cámara:", err);
-            cameraError = 'No se pudo acceder a la cámara. Asegúrate de dar permisos y usar HTTPS.';
-        }
+	function alternar(id: string) {
+		elegidos = elegidos.includes(id) ? elegidos.filter((x) => x !== id) : [...elegidos, id];
 	}
 
-	async function onScanSuccess(decodedText) {
-		try {
-			const data = JSON.parse(decodedText);
-			// Aceptamos cualquier QR para facilitar
-			if (data.app === 'recreativo' || data.app === 'comedor' || data.app === 'PP') {
-				if (Math.abs((Date.now() + timeOffset) - data.timestamp) <= 300000) {
-					qrVerified = true;
-					if (html5QrCode && html5QrCode.isScanning) {
-						await html5QrCode.stop().catch(e => console.error(e));
-					}
-				} else {
-					alert('Código QR Expirado. Pídele al preceptor que genere uno nuevo.');
-				}
-			} else {
-				alert('Código QR Inválido. Asegúrate de escanear un código válido de la escuela.');
-			}
-		} catch (e) {
-			alert('Código QR Inválido. Formato no reconocido.');
-		}
-	}
-
-	async function registrarRetiro() {
-		if (selectedItemIds.length === 0) return alert('Por favor, selecciona al menos un ítem para retirar.');
-		
-		loading = true;
-		const ahora = new Date();
-		const hora_retiro = ahora.toTimeString().split(' ')[0];
-		const fecha = ahora.toLocaleDateString('en-CA');
-
-        const registros = selectedItemIds.map(id => ({
-			perfil_id: session.user.id,
-            item_id: id,
-			fecha,
-			hora_retiro
-        }));
-
-		const { error } = await supabase.from('recreativo_movimientos').insert(registros);
-		
+	async function retirar() {
+		if (elegidos.length === 0) return;
+		retirando = true;
+		const fecha = hoyISO();
+		const hora_retiro = horaAhora();
+		const { error } = await supabase
+			.from('recreativo_movimientos')
+			.insert(elegidos.map((item_id) => ({ perfil_id: auth.perfil!.id, item_id, fecha, hora_retiro })));
+		retirando = false;
 		if (error) {
-			alert('Error al registrar retiro: ' + error.message);
-			loading = false;
+			console.error(error);
+			toast.error('No se pudo registrar el retiro: ' + error.message);
 			return;
 		}
-		
-		selectedItemIds = [];
-		qrVerified = false;
-		await loadMisPendientes();
-		alert('Retiro registrado con éxito. Acercate al preceptor para recibir los ítems.');
-        window.location.reload(); 
+		toast.success('Retiro registrado. Pedile los elementos al preceptor.');
+		elegidos = [];
+		qrValidado = false;
+		await cargar();
+	}
+
+	async function devolver(p: Prestamo) {
+		const nombre = p.item?.nombre ?? 'el elemento';
+		const ok = await confirmDialog({
+			title: `¿Devolviste ${nombre}?`,
+			description: 'Queda registrado como devuelto por vos. El preceptor después revisa en qué estado llegó.',
+			confirmLabel: 'Sí, lo devolví',
+			cancelLabel: 'Todavía no'
+		});
+		if (!ok) return;
+		devolviendo = p.id;
+		const { data, error } = await supabase
+			.from('recreativo_movimientos')
+			.update({ hora_devolucion: horaAhora() })
+			.eq('id', p.id)
+			.select('id');
+		devolviendo = null;
+		if (error || !data?.length) {
+			console.error(error);
+			toast.error('No se pudo registrar la devolución.' + (error ? ' ' + error.message : ''));
+			return;
+		}
+		toast.success(`${nombre}: devolución registrada`);
+		prestamos = prestamos.filter((x) => x.id !== p.id);
 	}
 </script>
 
-<div class="row justify-content-center">
-	<div class="col-md-8 col-lg-6 text-center">
-		<h2 class="fw-bold philips-text mb-4">Retiro Recreativo</h2>
+<svelte:head>
+	<title>Recreativo • Ingresos y egresos</title>
+</svelte:head>
 
-		{#if loading}
-			<div class="spinner-border text-primary" role="status"></div>
-		{:else}
-            {#if pendingMovimientos.length > 0}
-                <div class="alert alert-warning border-0 shadow-sm mb-4 text-start">
-                    <h6 class="fw-bold mb-2">Tienes ítems sin devolver:</h6>
-                    <ul class="mb-0 small">
-                        {#each pendingMovimientos as mov}
-                            <li><strong>{mov.item?.nombre}</strong> (Retirado a las {mov.hora_retiro.substring(0,5)})</li>
-                        {/each}
-                    </ul>
-                    <p class="small text-muted mt-2 mb-0">Un preceptor debe registrar la devolución.</p>
-                </div>
-            {/if}
+<div class="mx-auto flex max-w-lg flex-col gap-6">
+	<div>
+		<h1 class="text-2xl font-semibold tracking-tight md:text-3xl">Recreativo</h1>
+		<p class="text-muted-foreground">Retirá y devolvé paletas, pelotas y otros materiales</p>
+	</div>
 
-			<div class="card glass-card shadow-sm p-4 text-center">
-				{#if !qrVerified}
-					<div class="alert alert-info border-0 shadow-sm mb-4">
-						<h6 class="fw-bold mb-1">Escáner de Retiro</h6>
-						<p class="small mb-0">Escanea el QR del Preceptor para poder retirar un elemento.</p>
-					</div>
-
-					<div id="qr-reader" class="mb-3 overflow-hidden border border-primary rounded shadow-sm bg-black" style="min-height: 250px;">
-						{#if cameraError}
-							<div class="p-4 text-white d-flex flex-column align-items-center justify-content-center h-100">
-								<p class="mb-3 text-warning">{cameraError}</p>
-								<button class="btn btn-outline-light btn-sm" onclick={() => window.location.reload()}>REINTENTAR</button>
+	{#if cargando}
+		<Skeleton class="h-24 rounded-xl" />
+		<Skeleton class="h-80 rounded-xl" />
+	{:else}
+		{#if prestamos.length > 0}
+			<Card.Root class="gap-0 py-0">
+				<div class="border-b px-5 py-3">
+					<h2 class="text-base font-semibold">Lo que tenés retirado</h2>
+					<p class="text-sm text-muted-foreground">Cuando lo entregues, marcalo como devuelto.</p>
+				</div>
+				<ul class="divide-y">
+					{#each prestamos as p (p.id)}
+						<li class="flex items-center gap-3 px-5 py-3">
+							<div class="min-w-0 flex-1">
+								<div class="truncate font-medium">{p.item?.nombre ?? 'Elemento'}</div>
+								<div class="text-sm text-muted-foreground">
+									Retirado {p.fecha === hoyISO() ? 'hoy' : `el ${fmtFecha(p.fecha)}`} a las {fmtHora(p.hora_retiro)}
+								</div>
 							</div>
-						{/if}
+							<Button variant="outline" size="sm" disabled={devolviendo === p.id} onclick={() => devolver(p)}>
+								{#if devolviendo === p.id}<LoaderCircle class="animate-spin" />{:else}<CornerDownLeft />{/if}
+								Devolver
+							</Button>
+						</li>
+					{/each}
+				</ul>
+			</Card.Root>
+		{/if}
+
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>Retirar</Card.Title>
+				<Card.Description>
+					{qrValidado ? 'Elegí qué te llevás.' : 'Primero escaneá el QR del preceptor.'}
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="grid gap-4">
+				{#if !qrValidado}
+					<EscanearQr onValidado={() => (qrValidado = true)} />
+				{:else if items.length === 0}
+					<div class="flex flex-col items-center gap-2 py-8 text-center text-sm text-muted-foreground">
+						<PackageOpen class="size-8" strokeWidth={1.5} />
+						No hay elementos disponibles para retirar.
 					</div>
 				{:else}
-					<div class="bg-primary-subtle text-primary p-3 rounded mb-4 border border-primary-subtle">
-						<h5 class="fw-bold mb-1">Punto de Control Verificado</h5>
-						<p class="mb-0 small">Selecciona el ítem que deseas retirar.</p>
+					<div class="grid grid-cols-2 gap-2" role="group" aria-label="Elementos para retirar">
+						{#each items as it (it.id)}
+							{@const elegido = elegidos.includes(it.id)}
+							<button
+								type="button"
+								aria-pressed={elegido}
+								onclick={() => alternar(it.id)}
+								class={cn(
+									'flex min-h-12 items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50',
+									elegido && 'border-primary bg-primary/10 ring-1 ring-primary'
+								)}
+							>
+								<span
+									class={cn(
+										'flex size-4 shrink-0 items-center justify-center rounded border',
+										elegido && 'border-primary bg-primary text-primary-foreground'
+									)}
+								>
+									{#if elegido}<Check class="size-3" />{/if}
+								</span>
+								<span class="min-w-0 flex-1">{it.nombre}</span>
+							</button>
+						{/each}
 					</div>
-
-					<h4 class="fw-semibold mb-3">Solicitar Ítems</h4>
-					<p class="small text-muted mb-3">Selecciona los elementos que te vas a llevar:</p>
-                    
-					<div class="card p-3 mb-4 shadow-sm text-start" style="max-height: 250px; overflow-y: auto;">
-						{#if items.length === 0}
-							<p class="text-muted small mb-0">No hay ítems disponibles actualmente.</p>
-						{/if}
-                        {#each items as item}
-							<div class="form-check mb-2">
-								<input class="form-check-input" type="checkbox" value={item.id} id="item-{item.id}" bind:group={selectedItemIds}>
-								<label class="form-check-label" for="item-{item.id}">
-									{item.nombre}
-								</label>
-							</div>
-                        {/each}
-                    </div>
-
-					<button class="btn btn-primary btn-lg w-100 fw-bold shadow-sm" onclick={registrarRetiro}>REGISTRAR RETIRO</button>
+					<div class="grid grid-cols-2 gap-2">
+						<Button variant="outline" onclick={() => ((qrValidado = false), (elegidos = []))}>Cancelar</Button>
+						<Button disabled={elegidos.length === 0 || retirando} onclick={retirar}>
+							{#if retirando}<LoaderCircle class="animate-spin" />{/if}
+							Retirar{elegidos.length > 0 ? ` (${elegidos.length})` : ''}
+						</Button>
+					</div>
 				{/if}
-			</div>
-		{/if}
-	</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 </div>
-
-<style>
-	:global(#qr-reader video) {
-		object-fit: cover !important;
-	}
-</style>
