@@ -1,239 +1,153 @@
-<script>
-	import { Html5Qrcode } from 'html5-qrcode';
-	import { onMount, onDestroy } from 'svelte';
-    import { supabase } from '$lib/supabaseClient';
-    import { goto } from '$app/navigation';
-	
-	let session = $state(null);
-	let loading = $state(true);
-	let pendingMovement = $state(null);
-	let signature = $state('');
-	
-	let qrVerified = $state(false);
-	let html5QrCode;
-	let cameraError = $state('');
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { toast } from 'svelte-sonner';
+	import { supabase } from '$lib/supabase';
+	import { auth } from '$lib/auth.svelte';
+	import { diaDe, fmtHora, hoyISO, horaAhora } from '$lib/fechas';
+	import * as Card from '$lib/components/ui/card/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
+	import EscanearQr from '$lib/components/EscanearQr.svelte';
+	import { LoaderCircle, LogIn, LogOut, School, Clock } from '@lucide/svelte';
 
-	let timeOffset = 0;
+	type Salida = { id: string; hora_salida: string };
 
-	async function syncTime() {
-		try {
-			const res = await fetch(window.location.origin + '/?_t=' + Date.now(), { method: 'HEAD' });
-			const dateStr = res.headers.get('Date');
-			if (dateStr) {
-				timeOffset = new Date(dateStr).getTime() - Date.now();
-			}
-		} catch (e) {
-			console.warn('Error sincronizando hora:', e);
-		}
+	let cargando = $state(true);
+	let salida = $state<Salida | null>(null); // salida de hoy sin vuelta
+	let horaRegreso = $state<string | null>(null);
+	let qrValidado = $state(false);
+	let firma = $state('');
+	let enviando = $state(false);
+
+	async function cargar() {
+		const hoy = hoyISO();
+		const [mov, hor] = await Promise.all([
+			supabase
+				.from('movimientos')
+				.select('id, hora_salida')
+				.eq('perfil_id', auth.perfil!.id)
+				.eq('fecha', hoy)
+				.is('hora_ingreso', null)
+				.order('hora_salida', { ascending: false })
+				.limit(1)
+				.maybeSingle(),
+			auth.perfil!.curso_id
+				? supabase
+						.from('cursos_horarios')
+						.select('hora_regreso')
+						.eq('curso_id', auth.perfil!.curso_id)
+						.eq('dia', diaDe(hoy))
+						.maybeSingle()
+				: Promise.resolve({ data: null, error: null })
+		]);
+		if (mov.error) toast.error('No se pudo cargar tu estado: ' + mov.error.message);
+		salida = mov.data;
+		horaRegreso = hor.data?.hora_regreso ?? null;
+		cargando = false;
 	}
 
-	onMount(async () => {
-        const { data } = await supabase.auth.getSession();
-        session = data.session;
-        if (!session) {
-            goto('/');
-            return;
-        }
+	onMount(cargar);
 
-		await syncTime();
-		await checkPendingMovement();
-		if (!qrVerified) {
-			setTimeout(startScanner, 500);
-		}
-	});
+	async function registrar(event: Event) {
+		event.preventDefault();
+		if (!firma.trim()) return toast.error('Escribí tu nombre completo para firmar.');
+		enviando = true;
+		const { error } = salida
+			? await supabase
+					.from('movimientos')
+					.update({ hora_ingreso: horaAhora(), firma_ingreso: firma.trim() })
+					.eq('id', salida.id)
+			: await supabase.from('movimientos').insert({
+					perfil_id: auth.perfil!.id,
+					fecha: hoyISO(),
+					hora_salida: horaAhora(),
+					firma_salida: firma.trim()
+				});
+		enviando = false;
+		if (error) return toast.error('No se pudo registrar: ' + error.message);
 
-	onDestroy(async () => {
-		if (html5QrCode && html5QrCode.isScanning) {
-			await html5QrCode.stop().catch(e => console.error(e));
-		}
-	});
-
-	async function startScanner() {
-		if (html5QrCode) return;
-        
-        if (!window.isSecureContext && window.location.hostname !== 'localhost') {
-            cameraError = '⚠️ Error de Seguridad: El acceso a la cámara requiere HTTPS. Verifica que la URL empiece con https://';
-            return;
-        }
-
-		html5QrCode = new Html5Qrcode("qr-reader");
-        
-        try {
-            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-            await html5QrCode.start(
-                { facingMode: "environment" }, 
-                config, 
-                onScanSuccess
-            );
-        } catch (err) {
-            console.error("No se pudo iniciar la cámara:", err);
-            cameraError = 'No se pudo acceder a la cámara. Asegúrate de dar permisos y usar HTTPS.';
-        }
-	}
-
-	async function onScanSuccess(decodedText) {
-		try {
-			const data = JSON.parse(decodedText);
-			// Aceptamos tanto QR de comedor como de PP para mayor flexibilidad
-			if (data.app === 'comedor' || data.app === 'PP' || data.app === 'recreativo') {
-				// Allow up to 5 minutes (300000 ms) of difference to account for clock drift between devices
-				if (Math.abs((Date.now() + timeOffset) - data.timestamp) <= 300000) {
-					qrVerified = true;
-					if (html5QrCode && html5QrCode.isScanning) {
-						await html5QrCode.stop().catch(e => console.error(e));
-					}
-				} else {
-					alert('Código QR Expirado. Pídele al preceptor que genere uno nuevo.');
-				}
-			} else {
-				alert('Código QR Inválido. Asegúrate de escanear un código válido de la escuela.');
-			}
-		} catch (e) {
-			alert('Código QR Inválido. Formato no reconocido.');
-		}
-	}
-
-	function onScanFailure(error) {
-		// silent error
-	}
-
-
-
-	async function checkPendingMovement() {
-		loading = true;
-		const today = new Date().toLocaleDateString('en-CA');
-		
-		const { data, error } = await supabase
-			.from('movimientos')
-			.select('*')
-			.eq('perfil_id', session.user.id)
-			.eq('fecha', today)
-			.is('hora_ingreso', null)
-			.order('hora_salida', { ascending: false })
-			.limit(1)
-			.single();
-			
-		if (!error && data) {
-			pendingMovement = data;
+		if (salida) {
+			toast.success('Vuelta registrada. ¡Bienvenido/a!');
+			goto('/');
 		} else {
-			pendingMovement = null;
+			toast.success('Salida registrada. Acordate de registrar la vuelta.');
+			firma = '';
+			qrValidado = false;
+			await cargar();
 		}
-		
-		loading = false;
-	}
-
-	async function registrarSalida() {
-		if (!signature.trim()) return alert('Por favor, escribe tu nombre completo.');
-		
-		loading = true;
-		const ahora = new Date();
-		const hora_salida = ahora.toTimeString().split(' ')[0];
-		const fecha = ahora.toLocaleDateString('en-CA');
-
-		const { error } = await supabase.from('movimientos').insert({
-			perfil_id: session.user.id,
-			fecha,
-			hora_salida,
-			firma_salida: signature.trim(),
-			hora_ingreso: null,
-			firma_ingreso: null
-		});
-		
-		if (error) {
-			alert('Error al registrar salida: ' + error.message);
-			loading = false;
-			return;
-		}
-		
-		signature = '';
-		qrVerified = false;
-		await checkPendingMovement();
-		alert('Salida registrada con éxito.');
-        window.location.reload(); 
-	}
-
-	async function registrarIngreso() {
-		if (!signature.trim()) return alert('Por favor, firma para confirmar tu vuelta.');
-		
-		loading = true;
-		const ahora = new Date();
-		const hora_ingreso = ahora.toTimeString().split(' ')[0];
-
-		const { error } = await supabase
-			.from('movimientos')
-			.update({
-				hora_ingreso: hora_ingreso,
-				firma_ingreso: signature.trim()
-			})
-			.eq('id', pendingMovement.id);
-
-		if (error) {
-			alert('Error al registrar ingreso: ' + error.message);
-			loading = false;
-			return;
-		}
-
-		signature = '';
-		pendingMovement = null;
-		qrVerified = false;
-		loading = false;
-		alert('Ingreso registrado correctamente.');
-        window.location.href = '/';
 	}
 </script>
 
-<div class="row justify-content-center">
-	<div class="col-md-8 col-lg-6 text-center">
-		<h2 class="fw-bold philips-text mb-4">Registro de Alumno</h2>
+<svelte:head>
+	<title>Comedor • Ingresos y egresos</title>
+</svelte:head>
 
-		{#if loading}
-			<div class="spinner-border text-primary" role="status"></div>
-		{:else}
-			<div class="card glass-card shadow-sm p-4 text-center">
-				{#if !qrVerified}
-					<div class="alert alert-info border-0 shadow-sm mb-4">
-						<h6 class="fw-bold mb-1">Punto de Control</h6>
-						<p class="small mb-0">Escanea el QR del Preceptor para poder realizar el trámite.</p>
-					</div>
-
-					<div id="qr-reader" class="mb-3 overflow-hidden border border-primary rounded shadow-sm bg-black" style="min-height: 250px;">
-						{#if cameraError}
-							<div class="p-4 text-white d-flex flex-column align-items-center justify-content-center h-100">
-								<p class="mb-3 text-warning">{cameraError}</p>
-								<button class="btn btn-outline-light btn-sm" onclick={() => window.location.reload()}>REINTENTAR</button>
-							</div>
-						{/if}
-					</div>
-					
-
-				{:else}
-					{#if pendingMovement}
-						<div class="bg-warning-subtle text-warning-emphasis p-3 rounded mb-4 border border-warning-subtle">
-							<h5 class="fw-bold mb-1">Actualmente: FUERA</h5>
-							<p class="mb-0 small text-muted">Salida registrada a las {pendingMovement.hora_salida}</p>
-						</div>
-
-						<h4 class="fw-semibold mb-3">Registrar Regreso</h4>
-						<input type="text" class="form-control form-control-lg text-center bg-light border-0 mb-3" bind:value={signature} placeholder="Tu firma aquí...">
-						<button class="btn btn-primary btn-lg w-100 fw-bold shadow-sm" onclick={registrarIngreso}>CONFIRMAR INGRESO</button>
-					{:else}
-						<div class="bg-success-subtle text-success-emphasis p-3 rounded mb-4 border border-success-subtle">
-							<h5 class="fw-bold mb-1">Estado: DENTRO</h5>
-							<p class="mb-0 small text-muted">Listo para registrar salida de almuerzo.</p>
-						</div>
-
-						<h4 class="fw-semibold mb-3">Registrar Salida</h4>
-						<input type="text" class="form-control form-control-lg text-center bg-light border-0 mb-3" bind:value={signature} placeholder="Tu firma aquí...">
-						<button class="btn btn-warning btn-lg w-100 fw-bold shadow-sm" onclick={registrarSalida}>REGISTRAR SALIDA</button>
-					{/if}
-				{/if}
-			</div>
-		{/if}
+<div class="mx-auto flex max-w-lg flex-col gap-6">
+	<div>
+		<h1 class="text-2xl font-semibold tracking-tight md:text-3xl">Comedor</h1>
+		<p class="text-muted-foreground">Registrá tu salida y tu vuelta del almuerzo</p>
 	</div>
-</div>
 
-<style>
-	:global(#qr-reader video) {
-		object-fit: cover !important;
-	}
-</style>
+	{#if cargando}
+		<Skeleton class="h-20 rounded-xl" />
+		<Skeleton class="h-80 rounded-xl" />
+	{:else}
+		<div
+			class="flex items-center gap-3 rounded-xl border px-4 py-3 {salida
+				? 'border-amber-500/30 bg-amber-500/10'
+				: 'border-emerald-500/30 bg-emerald-500/10'}"
+		>
+			{#if salida}
+				<LogOut class="size-6 shrink-0 text-amber-600 dark:text-amber-300" />
+				<div>
+					<div class="font-semibold">Estás afuera</div>
+					<div class="text-sm text-muted-foreground">Saliste a las {fmtHora(salida.hora_salida)}</div>
+				</div>
+			{:else}
+				<School class="size-6 shrink-0 text-emerald-600 dark:text-emerald-300" />
+				<div>
+					<div class="font-semibold">Estás en la escuela</div>
+					<div class="text-sm text-muted-foreground">Podés registrar tu salida al almuerzo.</div>
+				</div>
+			{/if}
+		</div>
+
+		{#if horaRegreso}
+			<p class="-mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+				<Clock class="size-4" />
+				Hoy tenés que volver antes de las {fmtHora(horaRegreso)}.
+			</p>
+		{/if}
+
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>{salida ? 'Registrar vuelta' : 'Registrar salida'}</Card.Title>
+				<Card.Description>
+					{qrValidado ? 'Firmá con tu nombre completo.' : 'Primero escaneá el QR del preceptor.'}
+				</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				{#if !qrValidado}
+					<EscanearQr onValidado={() => (qrValidado = true)} />
+				{:else}
+					<form class="grid gap-4" onsubmit={registrar}>
+						<div class="grid gap-2">
+							<Label for="firma">Firma</Label>
+							<Input id="firma" bind:value={firma} placeholder="Nombre y apellido" autocomplete="name" class="h-11 text-base" />
+						</div>
+						<div class="grid grid-cols-2 gap-2">
+							<Button type="button" variant="outline" onclick={() => (qrValidado = false)}>Cancelar</Button>
+							<Button type="submit" disabled={enviando}>
+								{#if enviando}<LoaderCircle class="animate-spin" />{:else if salida}<LogIn />{:else}<LogOut />{/if}
+								{salida ? 'Registrar vuelta' : 'Registrar salida'}
+							</Button>
+						</div>
+					</form>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+	{/if}
+</div>

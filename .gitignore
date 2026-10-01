@@ -56,3 +56,5 @@ yarn-error.log*
 *.sql
 # Si quieres mantener supabase_schema.sql en el repositorio, descomenta la siguiente línea:
 # !supabase_schema.sql
+# Migraciones versionadas de Supabase (el resto de los .sql sigue ignorado)
+!supabase/migrations/*.sql

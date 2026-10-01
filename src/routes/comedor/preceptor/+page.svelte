@@ -1,443 +1,267 @@
-<script>
+<script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import QRCode from 'qrcode';
-    import { supabase } from '$lib/supabaseClient';
-    import { goto } from '$app/navigation';
+	import { toast } from 'svelte-sonner';
+	import { supabase } from '$lib/supabase';
+	import { diaDe, fmtHora, fmtMinutos, hoyISO, horaAhora, minutosDeDiferencia } from '$lib/fechas';
+	import * as Card from '$lib/components/ui/card/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import * as Table from '$lib/components/ui/table/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Badge } from '$lib/components/ui/badge/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
+	import DatePicker from '$lib/components/DatePicker.svelte';
+	import QrFirma from '$lib/components/QrFirma.svelte';
+	import AlumnoPicker, { type AlumnoOpcion } from '$lib/components/AlumnoPicker.svelte';
+	import { UserCheck, LoaderCircle, UtensilsCrossed, Settings2 } from '@lucide/svelte';
 
-    let session = $state(null);
-	let movimientos = $state([]);
-	let interval;
-	let qrInterval;
-	let qrToken = $state('');
-	let qrDataURL = $state('');
-    let selectedDate = $state(new Date().toLocaleDateString('en-CA'));
-	let timeLeft = $state(60);
-	let timerInterval;
-	let errorMsg = $state('');
+	type Movimiento = {
+		id: string;
+		perfil_id: string;
+		hora_salida: string;
+		hora_ingreso: string | null;
+		firma_salida: string | null;
+		perfil: {
+			email: string;
+			curso: { nombre: string; horarios: { dia: string; hora_regreso: string }[] } | null;
+		} | null;
+	};
 
-    let alumnos = $state([]);
-    let selectedAlumnoId = $state('');
-    let buscarAlumno = $state('');
-    let isAuthorizing = $state(false);
+	let fecha = $state(hoyISO());
+	let movimientos = $state<Movimiento[]>([]);
+	let cargando = $state(true);
+	let alumnos = $state<AlumnoOpcion[]>([]);
+	let reloj: ReturnType<typeof setInterval> | undefined;
 
-	let totalSalidas = $derived(movimientos.length);
-	let pendingReturns = $derived(movimientos.filter(m => !m.hora_ingreso).length);
-	let completedReturns = $derived(movimientos.filter(m => m.hora_ingreso).length);
+	let afuera = $derived(movimientos.filter((m) => !m.hora_ingreso).length);
 
-	let timeOffset = 0;
-	let isFullScreen = $state(false);
-
-	async function syncTime() {
-		try {
-			const res = await fetch(window.location.origin + '/?_t=' + Date.now(), { method: 'HEAD' });
-			const dateStr = res.headers.get('Date');
-			if (dateStr) {
-				timeOffset = new Date(dateStr).getTime() - Date.now();
-			}
-		} catch (e) {
-			console.warn('Error sincronizando hora:', e);
-		}
-	}
-
-	onMount(async () => {
-        const { data } = await supabase.auth.getSession();
-        session = data.session;
-        if (!session) {
-            goto('/');
-            return;
-        }
-
-		await syncTime();
-		await Promise.all([loadMovimientos(), cargarAlumnos()]);
-		interval = setInterval(loadMovimientos, 5000); // Polling cada 5 segundos
-		
-		createNewQR();
-		timerInterval = setInterval(() => {
-			timeLeft--;
-			if (timeLeft <= 0) createNewQR();
-		}, 1000);
-
-		document.addEventListener('fullscreenchange', () => {
-			isFullScreen = !!document.fullscreenElement;
-		});
-	});
-
-	onDestroy(() => {
-		if (interval) clearInterval(interval);
-		if (timerInterval) clearInterval(timerInterval);
-	});
-
-	async function loadMovimientos() {
+	async function cargarMovimientos() {
 		const { data, error } = await supabase
-            .from('movimientos')
-            .select(`
-                *,
-                perfiles:perfil_id (
-					email,
-					curso:curso_id (
-						nombre,
-						horarios:cursos_horarios (dia, hora_regreso)
-					)
-				)
-            `)
-            .eq('fecha', selectedDate)
-            .order('hora_salida', { ascending: false });
-
-        if (error) {
-            console.error('Error cargando movimientos:', error);
-			errorMsg = 'Error al cargar datos: ' + error.message;
-        } else {
-            movimientos = data;
-			errorMsg = '';
-        }
+			.from('movimientos')
+			.select(
+				'id, perfil_id, hora_salida, hora_ingreso, firma_salida, perfil:perfil_id(email, curso:curso_id(nombre, horarios:cursos_horarios(dia, hora_regreso)))'
+			)
+			.eq('fecha', fecha)
+			.order('hora_salida', { ascending: false });
+		if (error) toast.error('No se pudieron cargar las salidas: ' + error.message);
+		else movimientos = data as unknown as Movimiento[];
+		cargando = false;
 	}
 
-    async function cargarAlumnos() {
-        const { data, error } = await supabase
-            .from('perfiles')
-            .select('id, email, curso:curso_id(nombre)')
-            .eq('rol', 'student')
-            .order('email');
-        if (error) console.error('Error cargando alumnos:', error);
-        else alumnos = data;
-    }
+	onMount(() => {
+		void supabase
+			.from('perfiles')
+			.select('id, email, curso:curso_id(nombre)')
+			.eq('rol', 'student')
+			.order('email')
+			.then(({ data }) => (alumnos = (data as unknown as AlumnoOpcion[]) ?? []));
+		// Refresco automático mientras se mira el día de hoy.
+		reloj = setInterval(() => {
+			if (fecha === hoyISO() && !document.hidden) void cargarMovimientos();
+		}, 10000);
+	});
+	onDestroy(() => clearInterval(reloj));
 
-	function createNewQR() {
-		const payload = { app: 'comedor', timestamp: Date.now() + timeOffset };
-		const newToken = JSON.stringify(payload);
-		qrToken = 'QR Dinámico Activo';
-		generateQRCode(newToken);
-		timeLeft = 60;
+	$effect(() => {
+		void fecha;
+		cargando = true;
+		void cargarMovimientos();
+	});
+
+	function limite(m: Movimiento) {
+		return m.perfil?.curso?.horarios?.find((h) => h.dia === diaDe(fecha))?.hora_regreso ?? null;
 	}
 
-	async function generateQRCode(text) {
-		console.log('Generando QR para:', text);
-		try {
-			qrDataURL = await QRCode.toDataURL(text, {
-				width: 300,
-				margin: 2,
-				color: {
-					dark: '#0B5EAA',
-					light: '#ffffff'
-				}
-			});
-			console.log('QR generado con éxito');
-		} catch (err) {
-			console.error('Error generando QR:', err);
+	function estado(m: Movimiento) {
+		if (!m.hora_ingreso) return { texto: 'Afuera', clase: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300' };
+		const tarde = minutosDeDiferencia(m.hora_ingreso, limite(m));
+		if (tarde !== null && tarde > 0) {
+			return { texto: `Tarde ${fmtMinutos(tarde)}`, clase: 'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-300' };
 		}
+		return { texto: 'Volvió', clase: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' };
 	}
 
-	function fmtHora(t) { return t ? t.substring(0, 5) : '—'; }
+	// ---------- autorización manual ----------
+	let autorizarAbierto = $state(false);
+	let alumnoId = $state('');
+	let autorizando = $state(false);
+	let salidaAbierta = $state<{ id: string } | null>(null);
 
-	function getDiaDeFecha(fechaStr) {
-		const d = new Date(fechaStr + 'T12:00:00');
-		const keys = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
-		return keys[d.getDay()];
-	}
-
-	function fmtDiferencia(real, asignado) {
-		if (!real || !asignado) return null;
-		const [hR, mR] = real.split(':').map(Number);
-		const [hA, mA] = asignado.split(':').map(Number);
-		const minReal = hR * 60 + mR;
-		const minAsignado = hA * 60 + mA;
-		const diff = minReal - minAsignado;
-		
-		if (diff <= 0) return { texto: 'En Escuela', clase: 'bg-success-subtle text-success border-success-subtle' };
-		if (diff < 60) return { texto: `Tarde: ${diff} min`, clase: 'bg-danger-subtle text-danger border-danger-subtle' };
-		
-		const h = Math.floor(diff / 60);
-		const m = diff % 60;
-		return { texto: `Tarde: ${h}h ${m}m`, clase: 'bg-danger-subtle text-danger border-danger-subtle' };
-	}
-
-	function toggleFullScreen() {
-		const elem = document.getElementById('fullscreen-qr-view');
-		if (!document.fullscreenElement) {
-			elem?.requestFullscreen().catch(err => {
-				console.error(`Error attempting to enable fullscreen: ${err.message}`);
+	// Estado del alumno elegido hoy (no el del día que se esté mirando).
+	$effect(() => {
+		const id = alumnoId;
+		salidaAbierta = null;
+		if (!id) return;
+		void supabase
+			.from('movimientos')
+			.select('id')
+			.eq('perfil_id', id)
+			.eq('fecha', hoyISO())
+			.is('hora_ingreso', null)
+			.limit(1)
+			.maybeSingle()
+			.then(({ data }) => {
+				if (alumnoId === id) salidaAbierta = data;
 			});
-		} else {
-			document.exitFullscreen();
-		}
+	});
+
+	async function autorizar() {
+		if (!alumnoId) return;
+		autorizando = true;
+		const { error } = salidaAbierta
+			? await supabase
+					.from('movimientos')
+					.update({ hora_ingreso: horaAhora(), firma_ingreso: 'Autorizado por preceptor' })
+					.eq('id', salidaAbierta.id)
+			: await supabase.from('movimientos').insert({
+					perfil_id: alumnoId,
+					fecha: hoyISO(),
+					hora_salida: horaAhora(),
+					firma_salida: 'Autorizado por preceptor'
+				});
+		autorizando = false;
+		if (error) return toast.error('No se pudo registrar: ' + error.message);
+		toast.success(salidaAbierta ? 'Vuelta registrada' : 'Salida registrada');
+		autorizarAbierto = false;
+		alumnoId = '';
+		fecha = hoyISO();
+		await cargarMovimientos();
 	}
-
-    async function autorizarManual() {
-        if (!selectedAlumnoId) return alert('Seleccioná un alumno');
-        
-        isAuthorizing = true;
-        const ahora = new Date();
-        const hora = ahora.toTimeString().split(' ')[0];
-        const fecha = ahora.toLocaleDateString('en-CA');
-
-        // Verificar si tiene movimiento abierto hoy
-        const { data: abierto } = await supabase
-            .from('movimientos')
-            .select('*')
-            .eq('perfil_id', selectedAlumnoId)
-            .eq('fecha', fecha)
-            .is('hora_ingreso', null)
-            .maybeSingle();
-
-        let error;
-        if (abierto) {
-            // Registrar ingreso
-            const { error: err } = await supabase
-                .from('movimientos')
-                .update({ 
-                    hora_ingreso: hora, 
-                    firma_ingreso: 'Autorizado por Preceptor' 
-                })
-                .eq('id', abierto.id);
-            error = err;
-        } else {
-            // Registrar salida
-            const { error: err } = await supabase
-                .from('movimientos')
-                .insert({
-                    perfil_id: selectedAlumnoId,
-                    fecha,
-                    hora_salida: hora,
-                    firma_salida: 'Autorizado por Preceptor'
-                });
-            error = err;
-        }
-
-        if (error) {
-            alert('Error: ' + error.message);
-        } else {
-            selectedAlumnoId = '';
-            await loadMovimientos();
-            // Cerrar modal (esto es rústico pero efectivo con BS5)
-            const modal = document.getElementById('autorizarModal');
-            const bsModal = bootstrap.Modal.getInstance(modal);
-            bsModal.hide();
-        }
-        isAuthorizing = false;
-    }
-
 </script>
 
 <svelte:head>
-	<title>Panel Preceptor - Escuela Philips</title>
+	<title>Comedor • Ingresos y egresos</title>
 </svelte:head>
 
-<div class="row mb-4 align-items-center">
-	<div class="col-md-5">
-		<h2 class="fw-bold philips-text mb-1">Panel de Preceptor</h2>
-		<p class="text-muted small mb-0">Gestión de alumnos en tiempo real</p>
+<div class="mx-auto flex max-w-7xl flex-col gap-6">
+	<div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+		<div>
+			<h1 class="text-2xl font-semibold tracking-tight md:text-3xl">Comedor</h1>
+			<p class="text-muted-foreground">Salidas y vueltas del almuerzo</p>
+		</div>
+		<div class="grid grid-cols-2 gap-2 sm:flex">
+			<Button variant="outline" href="/accesos?tab=cursos">
+				<Settings2 />
+				Horarios
+			</Button>
+			<Button onclick={() => (autorizarAbierto = true)}>
+				<UserCheck />
+				Autorizar alumno
+			</Button>
+		</div>
 	</div>
-    <div class="col-md-3">
-        <div class="input-group input-group-sm shadow-sm">
-            <span class="input-group-text bg-white border-end-0">Fecha:</span>
-            <input type="date" class="form-control border-start-0" bind:value={selectedDate} onchange={() => loadMovimientos()}>
-        </div>
-    </div>
-	<div class="col-md-4 text-md-end mt-3 mt-md-0 d-flex gap-2 justify-content-md-end">
-		<a href="/comedor/admin" class="btn btn-outline-secondary fw-bold px-3 shadow-sm d-flex align-items-center gap-2">
-			CONFIG
-		</a>
-		<button class="btn btn-warning fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#autorizarModal">
-			AUTORIZAR ALUMNO
-		</button>
-		<button class="btn btn-primary fw-bold px-3 shadow-sm" data-bs-toggle="modal" data-bs-target="#qrModal" onclick={createNewQR}>
-			<i class="bi bi-qr-code me-2"></i>GENERAR QR DE FIRMA
-		</button>
-	</div>
-</div>
 
-{#if errorMsg}
-	<div class="alert alert-danger border-0 rounded-3 mb-4">{errorMsg}</div>
-{/if}
+	<div class="grid gap-6 lg:grid-cols-[18rem_1fr]">
+		<div class="order-2 lg:order-1">
+			<QrFirma app="comedor" />
+		</div>
 
-<!-- Modal Autorizar Manual -->
-<div class="modal fade" id="autorizarModal" tabindex="-1" aria-hidden="true">
-	<div class="modal-dialog modal-dialog-centered">
-		<div class="modal-content glass-card border-0">
-			<div class="modal-header border-0 pb-0">
-				<h5 class="modal-title fw-bold philips-text w-100 text-center">Autorización Manual</h5>
-				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-			</div>
-			<div class="modal-body py-4">
-				<div class="mb-3">
-					<label class="form-label small fw-bold text-muted">BUSCAR ALUMNO</label>
-					<div class="input-group input-group-sm mb-2">
-						<span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
-						<input
-							type="text"
-							class="form-control border-start-0"
-							placeholder="Filtrar por email o curso..."
-							bind:value={buscarAlumno}
-						/>
-					</div>
-					<select id="alumnoSelect" class="form-select" bind:value={selectedAlumnoId} size="5" style="height: auto;">
-						<option value="">— Seleccionar —</option>
-						{#each alumnos.filter(a =>
-							!buscarAlumno ||
-							a.email.toLowerCase().includes(buscarAlumno.toLowerCase()) ||
-							(a.curso?.nombre || '').toLowerCase().includes(buscarAlumno.toLowerCase())
-						) as a}
-							<option value={a.id}>{a.email} ({a.curso?.nombre || 'Sin curso'})</option>
-						{/each}
-					</select>
-				</div>
-
-				{#if selectedAlumnoId}
-					{@const estaAfuera = movimientos.some(m => m.perfil_id === selectedAlumnoId && !m.hora_ingreso)}
-					<div class="alert {estaAfuera ? 'alert-warning' : 'alert-success'} border-0 small mb-4">
-						<h6 class="fw-bold mb-1">Estado actual: {estaAfuera ? 'FUERA' : 'DENTRO'}</h6>
-						<p class="mb-0">Se registrará un {estaAfuera ? 'INGRESO' : 'EGRESO'} para este alumno.</p>
-					</div>
-
-					<button 
-						class="btn {estaAfuera ? 'btn-primary' : 'btn-warning'} w-100 fw-bold shadow-sm" 
-						onclick={autorizarManual}
-						disabled={isAuthorizing}
-					>
-						{#if isAuthorizing}
-							<span class="spinner-border spinner-border-sm me-2"></span> Procesando...
-						{:else}
-							CONFIRMAR {estaAfuera ? 'INGRESO' : 'EGRESO'}
-						{/if}
-					</button>
+		<div class="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+				<DatePicker bind:value={fecha} class="sm:w-72" />
+				{#if fecha !== hoyISO()}
+					<Button variant="ghost" size="sm" class="w-fit" onclick={() => (fecha = hoyISO())}>Volver a hoy</Button>
 				{/if}
 			</div>
-		</div>
-	</div>
-</div>
 
-{#if qrToken}
-<div class="row mb-4 justify-content-center">
-    <div class="col-md-4">
-        <div class="card glass-card text-center p-3">
-            <p class="text-muted small mb-1">Estado del QR</p>
-            <h5 class="fw-bold philips-text mb-2">Expira en {timeLeft}s</h5>
-            {#if qrDataURL}
-                <img src={qrDataURL} alt="QR" class="img-fluid mx-auto mb-2" style="max-width: 150px;" />
-                <div class="d-grid mt-2">
-                    <button class="btn btn-dark btn-sm fw-bold" onclick={toggleFullScreen}>⛶ Pantalla Completa</button>
-                </div>
-            {/if}
-            <p class="small text-muted mb-0 mt-2">Se actualiza automáticamente</p>
-        </div>
-    </div>
-</div>
-{/if}
-<div class="modal fade" id="qrModal" tabindex="-1" aria-hidden="true">
-	<div class="modal-dialog modal-dialog-centered">
-		<div class="modal-content glass-card border-0">
-			<div class="modal-header border-0 pb-0">
-				<h5 class="modal-title fw-bold philips-text w-100 text-center">QR DE FIRMA</h5>
-				<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+			<div class="grid grid-cols-3 gap-3">
+				{#each [{ l: 'Salidas', v: movimientos.length }, { l: 'Afuera', v: afuera }, { l: 'Volvieron', v: movimientos.length - afuera }] as s (s.l)}
+					<Card.Root class="gap-1 px-4 py-3">
+						<span class="text-xs text-muted-foreground">{s.l}</span>
+						<span class="text-2xl font-semibold tabular-nums">{s.v}</span>
+					</Card.Root>
+				{/each}
 			</div>
-			<div class="modal-body text-center py-4">
-				<p class="text-muted small mb-3">Muestra este código a los alumnos para que validen su ubicación antes de firmar.</p>
-				{#if qrDataURL}
-					<img src={qrDataURL} alt="QR de Acceso" class="img-fluid shadow-sm border rounded mb-3" style="max-width: 250px;" />
-				{:else}
-					<div class="p-5 text-muted small">Generando código...</div>
-				{/if}
-				<div class="bg-light p-2 rounded fw-bold text-danger mb-3">
-					Expira en: {timeLeft} segundos
+
+			{#if cargando}
+				<Skeleton class="h-64 rounded-xl" />
+			{:else if movimientos.length === 0}
+				<div class="flex flex-col items-center gap-3 rounded-xl border border-dashed py-14 text-muted-foreground">
+					<UtensilsCrossed class="size-10" strokeWidth={1.5} />
+					<p>No hubo salidas este día.</p>
 				</div>
-                <div class="d-flex justify-content-center gap-2 mt-3">
-                    <button class="btn btn-outline-primary btn-sm" onclick={createNewQR}>Forzar nuevo código</button>
-                    <button class="btn btn-dark btn-sm" onclick={toggleFullScreen}>⛶ Pantalla Completa</button>
-                </div>
-			</div>
-		</div>
-	</div>
-</div>
-
-<!-- Resumen -->
-<div class="row mb-4">
-	<div class="col-md-4">
-		<div class="card glass-card text-center p-3 border-0 shadow-sm mb-3">
-			<h5 class="text-muted small fw-bold mb-1">TOTAL SALIDAS HOY</h5>
-			<h2 class="fw-bold mb-0 text-primary">{totalSalidas}</h2>
-		</div>
-	</div>
-	<div class="col-md-4">
-		<div class="card glass-card text-center p-3 border-0 shadow-sm mb-3" style="background-color: #fff3cd;">
-			<h5 class="text-muted small fw-bold mb-1" style="color: #664d03 !important;">AFUERA</h5>
-			<h2 class="fw-bold mb-0" style="color: #664d03;">{pendingReturns}</h2>
-		</div>
-	</div>
-	<div class="col-md-4">
-		<div class="card glass-card text-center p-3 border-0 shadow-sm mb-3" style="background-color: #d1e7dd;">
-			<h5 class="text-muted small fw-bold mb-1" style="color: #0f5132 !important;">YA VOLVIERON</h5>
-			<h2 class="fw-bold mb-0" style="color: #0f5132;">{completedReturns}</h2>
-		</div>
-	</div>
-</div>
-
-<!-- Tabla -->
-<div class="card glass-card shadow-sm border-0 overflow-hidden">
-	<div class="table-responsive">
-		<table class="table table-hover mb-0 align-middle">
-			<thead class="table-light text-muted small text-uppercase">
-				<tr>
-					<th class="ps-4">Alumno</th>
-					<th>Curso</th>
-					<th>Salida</th>
-					<th>Límite</th>
-					<th>Ingreso</th>
-					<th class="pe-4">Estado</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#if movimientos.length === 0}
-					<tr><td colspan="5" class="py-5 text-center text-muted">No hay movimientos registrados hoy.</td></tr>
-				{:else}
-					{#each movimientos as mov (mov.id)}
-						{@const diaActual = getDiaDeFecha(selectedDate)}
-						{@const horarioRegreso = mov.perfiles?.curso?.horarios?.find(h => h.dia === diaActual)?.hora_regreso}
-						{@const diff = mov.hora_ingreso ? fmtDiferencia(mov.hora_ingreso, horarioRegreso) : null}
-						<tr>
-							<td class="ps-4">
-								<div class="fw-medium text-primary small">{mov.perfiles?.email || 'Desconocido'}</div>
-								<div class="text-muted" style="font-size: 0.7rem;">{mov.firma_salida}</div>
-							</td>
-							<td class="small text-muted">{mov.perfiles?.curso?.nombre || '—'}</td>
-							<td><span class="badge bg-light text-dark border-0 fw-normal">{mov.hora_salida.substring(0,5)}</span></td>
-							<td class="small">
-								{#if horarioRegreso}
-									<span class="badge bg-light text-muted border-0 fw-normal">{horarioRegreso.substring(0,5)}</span>
-								{:else}
-									<span class="text-muted">—</span>
-								{/if}
-							</td>
-							<td>
-								{#if mov.hora_ingreso}
-									<span class="badge bg-light text-dark border">{mov.hora_ingreso.substring(0,5)}</span>
-								{:else}
-									<span class="text-muted">—</span>
-								{/if}
-							</td>
-							<td class="pe-4">
-								{#if !mov.hora_ingreso}
-									<span class="badge rounded-pill bg-warning-subtle text-warning-emphasis border border-warning-subtle px-3">Ausente</span>
-								{:else if diff}
-									<span class="badge rounded-pill border px-3 {diff.clase}">{diff.texto}</span>
-								{:else}
-									<span class="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-3">En Escuela</span>
-								{/if}
-							</td>
-						</tr>
+			{:else}
+				<!-- Escritorio: tabla -->
+				<div class="hidden rounded-xl border xl:block">
+					<Table.Root>
+						<Table.Header>
+							<Table.Row>
+								<Table.Head>Alumno</Table.Head>
+								<Table.Head>Salida</Table.Head>
+								<Table.Head>Límite</Table.Head>
+								<Table.Head>Vuelta</Table.Head>
+								<Table.Head>Estado</Table.Head>
+							</Table.Row>
+						</Table.Header>
+						<Table.Body>
+							{#each movimientos as m (m.id)}
+								{@const e = estado(m)}
+								<Table.Row>
+									<Table.Cell>
+										<div class="max-w-72 truncate font-medium">{m.perfil?.email ?? '—'}</div>
+										<div class="text-xs text-muted-foreground">
+											{m.perfil?.curso?.nombre ?? 'Sin curso'}{#if m.firma_salida} · {m.firma_salida}{/if}
+										</div>
+									</Table.Cell>
+									<Table.Cell class="tabular-nums">{fmtHora(m.hora_salida)}</Table.Cell>
+									<Table.Cell class="text-muted-foreground tabular-nums">{fmtHora(limite(m))}</Table.Cell>
+									<Table.Cell class="tabular-nums">{fmtHora(m.hora_ingreso)}</Table.Cell>
+									<Table.Cell><Badge variant="outline" class={e.clase}>{e.texto}</Badge></Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</div>
+				<!-- Celular y tablet: tarjetas -->
+				<ul class="flex flex-col divide-y rounded-xl border xl:hidden">
+					{#each movimientos as m (m.id)}
+						{@const e = estado(m)}
+						<li class="flex flex-col gap-1.5 px-4 py-3">
+							<div class="flex items-start justify-between gap-2">
+								<div class="min-w-0">
+									<div class="truncate font-medium">{m.perfil?.email ?? '—'}</div>
+									<div class="text-sm text-muted-foreground">{m.perfil?.curso?.nombre ?? 'Sin curso'}</div>
+								</div>
+								<Badge variant="outline" class="shrink-0 {e.clase}">{e.texto}</Badge>
+							</div>
+							<div class="text-xs text-muted-foreground tabular-nums">
+								Salida {fmtHora(m.hora_salida)} · Límite {fmtHora(limite(m))} · Vuelta {fmtHora(m.hora_ingreso)}
+							</div>
+						</li>
 					{/each}
-				{/if}
-			</tbody>
-		</table>
+				</ul>
+			{/if}
+		</div>
 	</div>
 </div>
 
-<!-- FULLSCREEN VIEW -->
-<div id="fullscreen-qr-view" class="bg-white flex-column justify-content-center align-items-center text-center" style="display: {isFullScreen ? 'flex' : 'none'} !important; width: 100vw; height: 100vh;">
-	{#if isFullScreen}
-		<h1 class="fw-bold philips-text mb-4" style="font-size: 4vw;">QR DE FIRMA</h1>
-		<p class="text-muted fs-4 mb-4">Escaneá este código para registrar tu salida/ingreso.</p>
-		<img src={qrDataURL} alt="QR" style="width: 50vw; max-width: 50vh; object-fit: contain;" class="shadow-lg border rounded p-4 mb-4 bg-white" />
-		<h2 class="fw-bold text-danger mb-5" style="font-size: 3vw;">Expira en: {timeLeft}s</h2>
-		<button class="btn btn-outline-secondary btn-lg" onclick={toggleFullScreen}>Salir de Pantalla Completa</button>
-	{/if}
-</div>
+<Dialog.Root bind:open={autorizarAbierto}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Autorizar alumno</Dialog.Title>
+			<Dialog.Description>Registra la salida o la vuelta de un alumno que no puede escanear el QR.</Dialog.Description>
+		</Dialog.Header>
+		<div class="grid gap-4">
+			<div class="grid gap-2">
+				<Label for="autorizar-alumno">Alumno</Label>
+				<AlumnoPicker id="autorizar-alumno" {alumnos} bind:value={alumnoId} />
+			</div>
+			{#if alumnoId}
+				<p class="rounded-lg border bg-muted/50 px-3 py-2 text-sm">
+					{#if salidaAbierta}
+						Está <strong>afuera</strong>: se registra su <strong>vuelta</strong>.
+					{:else}
+						Está <strong>en la escuela</strong>: se registra su <strong>salida</strong>.
+					{/if}
+				</p>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (autorizarAbierto = false)} disabled={autorizando}>Cancelar</Button>
+			<Button onclick={autorizar} disabled={autorizando || !alumnoId}>
+				{#if autorizando}<LoaderCircle class="animate-spin" />{/if}
+				{salidaAbierta ? 'Registrar vuelta' : 'Registrar salida'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
