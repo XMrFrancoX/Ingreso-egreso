@@ -72,14 +72,15 @@
 			{/if}
 		</div>
 		<p class="text-sm text-muted-foreground tabular-nums">Se renueva en {restante} s</p>
-		<div class="grid w-full grid-cols-2 gap-2">
-			<Button variant="outline" size="sm" onclick={renovar}>
-				<RefreshCw />
-				Nuevo código
-			</Button>
+		<!-- En la columna angosta de escritorio (lg) no entran lado a lado: van apilados. -->
+		<div class="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-1">
 			<Button size="sm" onclick={pantallaCompleta}>
 				<Maximize />
 				Pantalla completa
+			</Button>
+			<Button variant="outline" size="sm" onclick={renovar}>
+				<RefreshCw />
+				Nuevo código
 			</Button>
 		</div>
 	</Card.Content>
