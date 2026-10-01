@@ -6,6 +6,11 @@ export const DIAS: Dia[] = ['L', 'M', 'X', 'J', 'V'];
 export const DIA_NOMBRE: Record<Dia, string> = { L: 'Lunes', M: 'Martes', X: 'Miércoles', J: 'Jueves', V: 'Viernes' };
 const DIAS_SEMANA = ['D', 'L', 'M', 'X', 'J', 'V', 'S'] as const;
 
+/** Días como vienen de la base (en cualquier orden) ordenados de lunes a viernes. */
+export function ordenarDias(dias: { dia: string }[] | null | undefined): Dia[] {
+	return DIAS.filter((d) => dias?.some((x) => x.dia === d));
+}
+
 /** "2026-09-30" (fecha de hoy en Argentina). */
 export function hoyISO(fecha = new Date()) {
 	return fecha.toLocaleDateString('en-CA', { timeZone: TZ });

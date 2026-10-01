@@ -3,7 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
 	import { confirmDialog } from '$lib/utils/confirm';
-	import { DIAS, DIA_NOMBRE, fmtHora, hoyISO, type Dia } from '$lib/fechas';
+	import { DIAS, DIA_NOMBRE, fmtHora, hoyISO, ordenarDias, type Dia } from '$lib/fechas';
 	import { exportarExcel, exportarPdf } from '$lib/exportar';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -44,7 +44,7 @@
 				email: x.email,
 				empresa_id: x.empresa_id,
 				horario: x.horario_entrada?.slice(0, 5) ?? '',
-				dias: (x.dias_habilitados ?? []).map((d) => d.dia as Dia)
+				dias: ordenarDias(x.dias_habilitados)
 			}))
 			.filter((x) => x.empresa_id || x.horario || x.dias.length);
 		precargados = (p.data ?? []).map((x) => ({
@@ -52,7 +52,7 @@
 			email: x.email,
 			empresa_id: x.empresa_id,
 			horario: x.horario_entrada?.slice(0, 5) ?? '',
-			dias: (x.alumnos_precargados_dias ?? []).map((d) => d.dia as Dia)
+			dias: ordenarDias(x.alumnos_precargados_dias)
 		}));
 		cargando = false;
 	}

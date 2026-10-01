@@ -3,7 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
 	import { auth } from '$lib/auth.svelte';
-	import { DIAS, DIA_NOMBRE, diaDe, fmtHora, hoyISO, horaAhora, type Dia } from '$lib/fechas';
+	import { DIAS, DIA_NOMBRE, diaDe, fmtHora, hoyISO, horaAhora, ordenarDias, type Dia } from '$lib/fechas';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
@@ -36,7 +36,7 @@
 		if (p.error || d.error || r.error) toast.error('No se pudo cargar tu pasantía. Probá recargar.');
 		empresa = (p.data?.empresa as { nombre: string } | null)?.nombre ?? null;
 		horario = p.data?.horario_entrada ?? null;
-		dias = (d.data ?? []).map((x) => x.dia as Dia);
+		dias = ordenarDias(d.data);
 		registroHoy = r.data;
 		cargando = false;
 	}
