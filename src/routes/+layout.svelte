@@ -13,6 +13,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import Login from '$lib/components/Login.svelte';
+	import AppInstalable from '$lib/components/AppInstalable.svelte';
 	import { LoaderCircle } from '@lucide/svelte';
 
 	let { children } = $props();
@@ -58,7 +59,8 @@
 	});
 </script>
 
-<ModeWatcher />
+<!-- themeColors: color de la barra del sistema (celular / app instalada) según el tema. -->
+<ModeWatcher themeColors={{ light: '#ffffff', dark: '#07090f' }} />
 <Toaster richColors position="top-center" />
 <ConfirmDialog />
 
@@ -81,6 +83,7 @@
 				<span class="truncate text-sm font-medium">{titulo}</span>
 				<ThemeToggle class="-mr-1 ml-auto" />
 			</header>
+			<AppInstalable />
 			<div class="flex-1 p-4 md:p-6 lg:p-8">
 				{@render children()}
 			</div>

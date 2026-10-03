@@ -6,6 +6,20 @@
 		<link rel="icon" href="https://www.philips.edu.ar/favicon.png" />
 		<meta name="description" content="Plataforma de control de alumnos de la Escuela Técnica Philips: comedor, pasantías y recreativo" />
 		<title>Ingresos y egresos • Escuela Philips</title>
+		<!-- App instalable (PWA): ver static/manifest.webmanifest y src/lib/pwa.svelte.ts -->
+		<link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" />
+		<link rel="apple-touch-icon" href="%sveltekit.assets%/icons/apple-touch-icon.png" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="Ingresos" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+		<script>
+			// Chrome avisa que la app se puede instalar a veces antes de que cargue: se guarda el aviso.
+			window.addEventListener('beforeinstallprompt', function (e) {
+				e.preventDefault();
+				window.__eventoInstalar = e;
+			});
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
