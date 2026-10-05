@@ -8,8 +8,9 @@
 	import * as Avatar from '$lib/components/ui/avatar/index.js';
 	import { useSidebar } from '$lib/components/ui/sidebar/index.js';
 	import {
-		House, UtensilsCrossed, BriefcaseBusiness, Volleyball, School, ShieldCheck, LogOut, ChevronsUpDown
+		House, UtensilsCrossed, BriefcaseBusiness, Volleyball, School, ShieldCheck, LogOut, ChevronsUpDown, Download
 	} from '@lucide/svelte';
+	import { instalacion } from '$lib/pwa.svelte';
 	import type { Component } from 'svelte';
 
 	type Item = { href: string; label: string; icon: Component; seccion?: Seccion };
@@ -148,6 +149,12 @@
 							</div>
 						</DropdownMenu.Label>
 						<DropdownMenu.Separator />
+						{#if instalacion.disponible}
+							<DropdownMenu.Item onclick={() => instalacion.instalar()}>
+								<Download />
+								Instalar app
+							</DropdownMenu.Item>
+						{/if}
 						<DropdownMenu.Item onclick={salir}>
 							<LogOut />
 							Cerrar sesión
