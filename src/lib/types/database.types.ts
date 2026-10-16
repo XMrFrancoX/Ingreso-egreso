@@ -10,13 +10,14 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.5"
+    PostgrestVersion: "14.17"
   }
   public: {
     Tables: {
       alumnos_precargados: {
         Row: {
           created_at: string | null
+          dni: string | null
           email: string
           empresa_id: string | null
           horario_entrada: string | null
@@ -24,6 +25,7 @@ export type Database = {
         }
         Insert: {
           created_at?: string | null
+          dni?: string | null
           email: string
           empresa_id?: string | null
           horario_entrada?: string | null
@@ -31,6 +33,7 @@ export type Database = {
         }
         Update: {
           created_at?: string | null
+          dni?: string | null
           email?: string
           empresa_id?: string | null
           horario_entrada?: string | null
@@ -211,6 +214,7 @@ export type Database = {
         Row: {
           created_at: string
           curso_id: string | null
+          dni: string | null
           email: string
           empresa_id: string | null
           horario_entrada: string | null
@@ -220,6 +224,7 @@ export type Database = {
         Insert: {
           created_at?: string
           curso_id?: string | null
+          dni?: string | null
           email: string
           empresa_id?: string | null
           horario_entrada?: string | null
@@ -229,6 +234,7 @@ export type Database = {
         Update: {
           created_at?: string
           curso_id?: string | null
+          dni?: string | null
           email?: string
           empresa_id?: string | null
           horario_entrada?: string | null
@@ -420,14 +426,75 @@ export type Database = {
           },
         ]
       }
+      tardes_procesador: {
+        Row: {
+          actualizado_en: string
+          enviado_en: string | null
+          estado: string
+          hora_fichada: string
+          intentos: number
+          minutos: number
+          perfil_id: string
+          registro_id: string
+          respuesta: string | null
+        }
+        Insert: {
+          actualizado_en?: string
+          enviado_en?: string | null
+          estado?: string
+          hora_fichada: string
+          intentos?: number
+          minutos: number
+          perfil_id: string
+          registro_id: string
+          respuesta?: string | null
+        }
+        Update: {
+          actualizado_en?: string
+          enviado_en?: string | null
+          estado?: string
+          hora_fichada?: string
+          intentos?: number
+          minutos?: number
+          perfil_id?: string
+          registro_id?: string
+          respuesta?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tardes_procesador_perfil_id_fkey"
+            columns: ["perfil_id"]
+            isOneToOne: false
+            referencedRelation: "perfiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tardes_procesador_registro_id_fkey"
+            columns: ["registro_id"]
+            isOneToOne: true
+            referencedRelation: "registros"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
       aplicar_precarga_pp: { Args: never; Returns: boolean }
+      disparar_tardes_procesador: { Args: never; Returns: number }
       es_admin: { Args: never; Returns: boolean }
       es_staff: { Args: never; Returns: boolean }
+      minutos_tarde: {
+        Args: { p_esperada: string; p_real: string }
+        Returns: number
+      }
+      registrar_tardes_procesador: {
+        Args: { p_resultados: Json }
+        Returns: number
+      }
+      reintentar_tarde: { Args: { p_registro: string }; Returns: undefined }
       rol_actual: { Args: never; Returns: string }
     }
     Enums: {

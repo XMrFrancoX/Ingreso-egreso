@@ -9,12 +9,14 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import DatePicker from '$lib/components/DatePicker.svelte';
-	import { BriefcaseBusiness } from '@lucide/svelte';
+	import { BriefcaseBusiness, RotateCcw } from '@lucide/svelte';
 
+	type Procesador = { estado: string; respuesta: string | null; intentos: number };
 	type Registro = {
 		id: string;
 		hora_entrada_real: string;
 		perfil: { email: string; horario_entrada: string | null; empresa: { nombre: string } | null } | null;
+		procesador: Procesador | null;
 	};
 
 	let fecha = $state(hoyISO());
@@ -25,7 +27,9 @@
 	async function cargar() {
 		const { data, error } = await supabase
 			.from('registros')
-			.select('id, hora_entrada_real, perfil:perfil_id(email, horario_entrada, empresa:empresa_id(nombre))')
+			.select(
+				'id, hora_entrada_real, perfil:perfil_id(email, horario_entrada, empresa:empresa_id(nombre)), procesador:tardes_procesador(estado, respuesta, intentos)'
+			)
 			.eq('fecha', fecha)
 			.order('hora_entrada_real');
 		if (error) toast.error('No se pudieron cargar los registros: ' + error.message);
@@ -55,7 +59,71 @@
 	}
 
 	let tardes = $derived(registros.filter((r) => (minutosDeDiferencia(r.hora_entrada_real, r.perfil?.horario_entrada) ?? 0) > 0).length);
+
+	// Cómo quedó la tarde en el procesador de asistencias del colegio (la manda la base cada 5 min).
+	const GRIS = 'border-border bg-muted text-muted-foreground';
+	const ROJO = 'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-300';
+	const AMBAR = 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300';
+	const VERDE = 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300';
+	function enProcesador(p: Procesador) {
+		switch (p.estado) {
+			case 'enviado':
+			case 'ya_estaba':
+				return { texto: 'Anotada', clase: VERDE, problema: false, reintentar: false };
+			case 'en_cola':
+				return { texto: 'En cola', clase: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', problema: false, reintentar: false };
+			case 'pendiente':
+				return { texto: 'Por mandar', clase: GRIS, problema: false, reintentar: false };
+			case 'sin_dni':
+				return { texto: 'Falta DNI', clase: AMBAR, problema: true, reintentar: false };
+			case 'rechazado':
+				return { texto: 'Rechazada', clase: ROJO, problema: true, reintentar: true };
+			case 'omitido':
+				return { texto: 'No se mandó', clase: GRIS, problema: true, reintentar: true };
+			default:
+				return p.intentos >= 10
+					? { texto: 'Falló', clase: ROJO, problema: true, reintentar: true }
+					: { texto: 'Reintentando', clase: AMBAR, problema: true, reintentar: false };
+		}
+	}
+
+	let reintentando = $state<string | null>(null);
+	async function reintentar(r: Registro) {
+		reintentando = r.id;
+		const { error } = await supabase.rpc('reintentar_tarde', { p_registro: r.id });
+		reintentando = null;
+		if (error) return toast.error('No se pudo reintentar: ' + error.message);
+		toast.success('Se vuelve a mandar en los próximos 5 minutos.');
+		await cargar();
+	}
 </script>
+
+{#snippet procesador(r: Registro)}
+	{#if r.procesador}
+		{@const p = enProcesador(r.procesador)}
+		<div class="flex min-w-0 flex-col items-start gap-1">
+			<div class="flex items-center gap-1">
+				<Badge variant="outline" class={p.clase}>{p.texto}</Badge>
+				{#if p.reintentar}
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						aria-label="Volver a mandar la tarde de {r.perfil?.email ?? 'este alumno'}"
+						disabled={reintentando === r.id}
+						onclick={() => reintentar(r)}
+					>
+						<RotateCcw />
+					</Button>
+				{/if}
+			</div>
+			{#if p.problema && r.procesador.respuesta}
+				<span class="text-xs text-muted-foreground">{r.procesador.respuesta}</span>
+			{/if}
+		</div>
+	{:else}
+		<span class="text-muted-foreground">—</span>
+	{/if}
+{/snippet}
 
 <div class="flex min-w-0 flex-col gap-4">
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -91,6 +159,7 @@
 						<Table.Head>Esperada</Table.Head>
 						<Table.Head>Entrada</Table.Head>
 						<Table.Head>Estado</Table.Head>
+						<Table.Head>Procesador</Table.Head>
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
@@ -102,6 +171,7 @@
 							<Table.Cell class="text-muted-foreground tabular-nums">{fmtHora(r.perfil?.horario_entrada)}</Table.Cell>
 							<Table.Cell class="tabular-nums">{fmtHora(r.hora_entrada_real)}</Table.Cell>
 							<Table.Cell><Badge variant="outline" class={e.clase}>{e.texto}</Badge></Table.Cell>
+							<Table.Cell class="max-w-64 whitespace-normal">{@render procesador(r)}</Table.Cell>
 						</Table.Row>
 					{/each}
 				</Table.Body>
@@ -121,6 +191,12 @@
 					<div class="text-xs text-muted-foreground tabular-nums">
 						Esperada {fmtHora(r.perfil?.horario_entrada)} · Entrada {fmtHora(r.hora_entrada_real)}
 					</div>
+					{#if r.procesador}
+						<div class="flex items-start gap-2 text-xs text-muted-foreground">
+							<span class="pt-0.5">Procesador:</span>
+							{@render procesador(r)}
+						</div>
+					{/if}
 				</li>
 			{/each}
 		</ul>
