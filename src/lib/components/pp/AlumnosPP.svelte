@@ -18,8 +18,8 @@
 	import { cn } from '$lib/utils/cn.js';
 
 	type Empresa = { id: string; nombre: string };
-	type AlumnoPP = { id: string; email: string; empresa_id: string | null; horario: string; dias: Dia[] };
-	type Precargado = { id: string; email: string; empresa_id: string | null; horario: string; dias: Dia[] };
+	type AlumnoPP = { id: string; email: string; dni: string; empresa_id: string | null; horario: string; dias: Dia[] };
+	type Precargado = { id: string; email: string; dni: string; empresa_id: string | null; horario: string; dias: Dia[] };
 
 	let empresas = $state<Empresa[]>([]);
 	let alumnos = $state<AlumnoPP[]>([]);
@@ -28,12 +28,14 @@
 	let busqueda = $state('');
 
 	const nombreEmpresa = (id: string | null) => empresas.find((e) => e.id === id)?.nombre ?? 'Sin empresa';
+	// El DNI lo usa el procesador de asistencias del colegio para anotarle las llegadas tarde.
+	const fmtDni = (dni: string) => (dni ? Number(dni).toLocaleString('es-AR') : '');
 
 	async function cargar() {
 		const [e, a, p] = await Promise.all([
 			supabase.from('empresas').select('id, nombre').order('nombre'),
-			supabase.from('perfiles').select('id, email, empresa_id, horario_entrada, dias_habilitados(dia)').eq('rol', 'student').order('email'),
-			supabase.from('alumnos_precargados').select('id, email, empresa_id, horario_entrada, alumnos_precargados_dias(dia)').order('email')
+			supabase.from('perfiles').select('id, email, dni, empresa_id, horario_entrada, dias_habilitados(dia)').eq('rol', 'student').order('email'),
+			supabase.from('alumnos_precargados').select('id, email, dni, empresa_id, horario_entrada, alumnos_precargados_dias(dia)').order('email')
 		]);
 		if (e.error || a.error || p.error) toast.error('No se pudieron cargar los alumnos de pasantías.');
 		empresas = e.data ?? [];
@@ -42,6 +44,7 @@
 			.map((x) => ({
 				id: x.id,
 				email: x.email,
+				dni: x.dni ?? '',
 				empresa_id: x.empresa_id,
 				horario: x.horario_entrada?.slice(0, 5) ?? '',
 				dias: ordenarDias(x.dias_habilitados)
@@ -50,6 +53,7 @@
 		precargados = (p.data ?? []).map((x) => ({
 			id: x.id,
 			email: x.email,
+			dni: x.dni ?? '',
 			empresa_id: x.empresa_id,
 			horario: x.horario_entrada?.slice(0, 5) ?? '',
 			dias: ordenarDias(x.alumnos_precargados_dias)
@@ -59,11 +63,17 @@
 
 	onMount(cargar);
 
-	let filtrados = $derived(alumnos.filter((a) => a.email.toLowerCase().includes(busqueda.trim().toLowerCase())));
+	let filtrados = $derived.by(() => {
+		const q = busqueda.trim().toLowerCase();
+		const qDni = q.replace(/\D/g, '');
+		return alumnos.filter((a) => a.email.toLowerCase().includes(q) || (qDni && a.dni.includes(qDni)));
+	});
+	let sinDni = $derived(alumnos.filter((a) => !a.dni).length);
 
 	// ---------- diálogo agregar / editar ----------
 	let dialogo = $state<{ modo: 'agregar' | 'editar'; id?: string } | null>(null);
 	let email = $state('');
+	let dni = $state('');
 	let empresaId = $state('');
 	let horario = $state('');
 	let dias = $state<Dia[]>([]);
@@ -72,6 +82,7 @@
 	function abrirAgregar() {
 		dialogo = { modo: 'agregar' };
 		email = '';
+		dni = '';
 		empresaId = '';
 		horario = '';
 		dias = [];
@@ -80,6 +91,7 @@
 	function abrirEditar(a: AlumnoPP) {
 		dialogo = { modo: 'editar', id: a.id };
 		email = a.email;
+		dni = a.dni;
 		empresaId = a.empresa_id ?? '';
 		horario = a.horario;
 		dias = [...a.dias];
@@ -89,10 +101,10 @@
 		dias = dias.includes(d) ? dias.filter((x) => x !== d) : DIAS.filter((x) => x === d || dias.includes(x));
 	}
 
-	async function guardarPerfil(perfilId: string) {
+	async function guardarPerfil(perfilId: string, dniLimpio: string | null) {
 		const { error } = await supabase
 			.from('perfiles')
-			.update({ empresa_id: empresaId || null, horario_entrada: horario || null })
+			.update({ dni: dniLimpio, empresa_id: empresaId || null, horario_entrada: horario || null })
 			.eq('id', perfilId);
 		if (error) throw error;
 		const del = await supabase.from('dias_habilitados').delete().eq('perfil_id', perfilId);
@@ -107,22 +119,24 @@
 		if (!dialogo) return;
 		const mail = email.trim().toLowerCase();
 		if (!mail.endsWith('@philips.edu.ar')) return toast.error('Tiene que ser un mail @philips.edu.ar');
+		const dniLimpio = dni.replace(/\D/g, '') || null;
+		if (dniLimpio && (dniLimpio.length < 6 || dniLimpio.length > 9)) return toast.error('El DNI tiene que tener entre 6 y 9 números.');
 		guardando = true;
 		try {
 			if (dialogo.modo === 'editar') {
-				await guardarPerfil(dialogo.id!);
+				await guardarPerfil(dialogo.id!, dniLimpio);
 				toast.success(`${mail} actualizado`);
 			} else {
 				// Si ya entró alguna vez se le asigna directo; si no, queda precargado y se aplica
 				// solo en su primer ingreso a Pasantías.
 				const { data: perfil } = await supabase.from('perfiles').select('id').eq('email', mail).maybeSingle();
 				if (perfil) {
-					await guardarPerfil(perfil.id);
+					await guardarPerfil(perfil.id, dniLimpio);
 					toast.success(`${mail} agregado a pasantías`);
 				} else {
 					const { data: pre, error } = await supabase
 						.from('alumnos_precargados')
-						.upsert({ email: mail, empresa_id: empresaId || null, horario_entrada: horario || null }, { onConflict: 'email' })
+						.upsert({ email: mail, dni: dniLimpio, empresa_id: empresaId || null, horario_entrada: horario || null }, { onConflict: 'email' })
 						.select('id')
 						.single();
 					if (error) throw error;
@@ -183,20 +197,21 @@
 					'PP',
 					alumnos.map((a) => ({
 						Mail: a.email,
+						DNI: a.dni ? Number(a.dni) : '',
 						Empresa: nombreEmpresa(a.empresa_id),
 						'Horario de entrada': fmtHora(a.horario),
 						...Object.fromEntries(DIAS.map((d) => [DIA_NOMBRE[d], a.dias.includes(d) ? 'Sí' : '']))
 					})),
-					[32, 22, 16, 8, 8, 10, 8, 8]
+					[32, 12, 22, 16, 8, 8, 10, 8, 8]
 				);
 			} else {
 				await exportarPdf({
 					archivo: `${nombre}.pdf`,
 					titulo: 'Pasantías (PP) — alumnos',
 					subtitulo: `Escuela Técnica Philips — ${new Date().toLocaleDateString('es-AR')}`,
-					columnas: ['Mail', 'Empresa', 'Entrada', ...DIAS],
-					filas: alumnos.map((a) => [a.email, nombreEmpresa(a.empresa_id), fmtHora(a.horario), ...DIAS.map((d) => (a.dias.includes(d) ? 'Sí' : ''))]),
-					centradas: [3, 4, 5, 6, 7]
+					columnas: ['Mail', 'DNI', 'Empresa', 'Entrada', ...DIAS],
+					filas: alumnos.map((a) => [a.email, fmtDni(a.dni), nombreEmpresa(a.empresa_id), fmtHora(a.horario), ...DIAS.map((d) => (a.dias.includes(d) ? 'Sí' : ''))]),
+					centradas: [4, 5, 6, 7, 8]
 				});
 			}
 		} catch (e) {
@@ -224,7 +239,7 @@
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-center">
 		<div class="relative sm:w-80">
 			<Search class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-			<Input bind:value={busqueda} placeholder="Buscar por mail" class="pl-8" aria-label="Buscar alumno" />
+			<Input bind:value={busqueda} placeholder="Buscar por mail o DNI" class="pl-8" aria-label="Buscar alumno" />
 		</div>
 		<div class="grid grid-cols-3 gap-2 sm:ml-auto sm:flex">
 			<Button variant="outline" onclick={() => exportar('excel')}><FileSpreadsheet />Excel</Button>
@@ -237,8 +252,13 @@
 		<Skeleton class="h-64 rounded-xl" />
 	{:else}
 		<Card.Root class="gap-0 py-0">
-			<div class="border-b px-4 py-3 text-sm font-medium text-muted-foreground">
+			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-4 py-3 text-sm font-medium text-muted-foreground">
 				{alumnos.length} alumnos en pasantías
+				{#if sinDni > 0}
+					<span class="text-amber-700 dark:text-amber-400">
+						{sinDni} sin DNI: sus llegadas tarde no se mandan al procesador
+					</span>
+				{/if}
 			</div>
 			{#if filtrados.length === 0}
 				<div class="flex flex-col items-center gap-2 py-12 text-sm text-muted-foreground">
@@ -251,8 +271,13 @@
 						<li class="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center">
 							<div class="min-w-0 flex-1">
 								<div class="truncate font-medium">{a.email}</div>
-								<div class="text-sm text-muted-foreground">
-									{nombreEmpresa(a.empresa_id)} · entrada {fmtHora(a.horario)}
+								<div class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+									{#if a.dni}
+										<span>DNI {fmtDni(a.dni)} ·</span>
+									{:else}
+										<Badge variant="outline" class="border-amber-500/50 text-amber-700 dark:text-amber-400">Sin DNI</Badge>
+									{/if}
+									<span>{nombreEmpresa(a.empresa_id)} · entrada {fmtHora(a.horario)}</span>
 								</div>
 							</div>
 							{@render pastillasDias(a.dias)}
@@ -285,7 +310,9 @@
 						<li class="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center">
 							<div class="min-w-0 flex-1">
 								<div class="truncate">{p.email}</div>
-								<div class="text-sm text-muted-foreground">{nombreEmpresa(p.empresa_id)} · entrada {fmtHora(p.horario)}</div>
+								<div class="text-sm text-muted-foreground">
+									{p.dni ? `DNI ${fmtDni(p.dni)}` : 'Sin DNI'} · {nombreEmpresa(p.empresa_id)} · entrada {fmtHora(p.horario)}
+								</div>
 							</div>
 							{@render pastillasDias(p.dias)}
 							<Button
@@ -320,6 +347,11 @@
 					<Input id="pp-email" type="email" bind:value={email} placeholder="nombre@philips.edu.ar" />
 				</div>
 			{/if}
+			<div class="grid gap-2">
+				<Label for="pp-dni">DNI</Label>
+				<Input id="pp-dni" inputmode="numeric" autocomplete="off" bind:value={dni} placeholder="Sólo números" />
+				<p class="text-xs text-muted-foreground">Con el DNI, sus llegadas tarde se anotan solas en el procesador de asistencias.</p>
+			</div>
 			<div class="grid gap-2">
 				<Label for="pp-empresa">Empresa</Label>
 				<Select.Root type="single" bind:value={empresaId}>
