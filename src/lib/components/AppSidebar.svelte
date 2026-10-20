@@ -10,6 +10,7 @@
 	import {
 		House, UtensilsCrossed, BriefcaseBusiness, Volleyball, School, ShieldCheck, LogOut, ChevronsUpDown, Download
 	} from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
 	import { instalacion } from '$lib/pwa.svelte';
 	import type { Component } from 'svelte';
 
@@ -54,6 +55,16 @@
 	async function salir() {
 		await auth.salir();
 		goto('/');
+	}
+
+	// Doble rol (ver auth.cambiarVista): primero vuelve al inicio, porque la pantalla actual puede
+	// no existir para el otro rol (si no, salta el aviso de "no tenés acceso").
+	async function cambiarVista(vista: string) {
+		if (vista !== 'staff' && vista !== 'alumno') return;
+		alNavegar();
+		await goto('/');
+		await auth.cambiarVista(vista);
+		toast.success(vista === 'alumno' ? 'Ahora estás usando la app como alumno.' : `Ahora estás usando la app como ${ROL_NOMBRE[auth.rol].toLowerCase()}.`);
 	}
 </script>
 
@@ -127,7 +138,7 @@
 								</Avatar.Root>
 								<div class="grid flex-1 text-left leading-tight">
 									<span class="truncate font-medium">{nombre}</span>
-									<span class="truncate text-xs text-muted-foreground">{auth.perfil ? ROL_NOMBRE[auth.perfil.rol] : ''}</span>
+									<span class="truncate text-xs text-muted-foreground">{auth.perfil ? ROL_NOMBRE[auth.rol] : ''}</span>
 								</div>
 								<ChevronsUpDown class="ml-auto" />
 							</Sidebar.MenuButton>
@@ -149,6 +160,14 @@
 							</div>
 						</DropdownMenu.Label>
 						<DropdownMenu.Separator />
+						{#if auth.puedeCambiarVista && auth.perfil}
+							<DropdownMenu.Label class="text-xs font-normal text-muted-foreground">Usar la app como</DropdownMenu.Label>
+							<DropdownMenu.RadioGroup value={auth.vista} onValueChange={cambiarVista}>
+								<DropdownMenu.RadioItem value="staff">{ROL_NOMBRE[auth.perfil.rol]}</DropdownMenu.RadioItem>
+								<DropdownMenu.RadioItem value="alumno">Alumno</DropdownMenu.RadioItem>
+							</DropdownMenu.RadioGroup>
+							<DropdownMenu.Separator />
+						{/if}
 						{#if instalacion.disponible}
 							<DropdownMenu.Item onclick={() => instalacion.instalar()}>
 								<Download />

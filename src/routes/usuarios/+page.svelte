@@ -13,7 +13,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import { Plus, Trash2, LoaderCircle, Search, Mail } from '@lucide/svelte';
 
-	type Usuario = { id: string; email: string; rol: Rol };
+	type Usuario = { id: string; email: string; rol: Rol; curso: { nombre: string } | null };
 	type Precarga = { id: string; email: string; rol: string };
 
 	const ROLES: Rol[] = ['student', 'preceptor', 'admin'];
@@ -29,7 +29,7 @@
 
 	async function cargar() {
 		const [u, p] = await Promise.all([
-			supabase.from('perfiles').select('id, email, rol').order('email'),
+			supabase.from('perfiles').select('id, email, rol, curso:curso_id(nombre)').order('email'),
 			supabase.from('roles_precargados').select('id, email, rol').order('email')
 		]);
 		if (u.error || p.error) toast.error('No se pudieron cargar los usuarios.');
@@ -143,6 +143,10 @@
 							<div class="flex min-w-0 flex-1 items-center gap-2">
 								<span class="truncate">{u.email}</span>
 								{#if yo}<Badge variant="secondary">Vos</Badge>{/if}
+								<!-- Doble rol: staff con curso, también usa la app como alumno (menú de su usuario). -->
+								{#if u.rol !== 'student' && u.curso}
+									<Badge variant="outline" class="shrink-0">También alumno · {u.curso.nombre}</Badge>
+								{/if}
 							</div>
 							<Select.Root type="single" value={u.rol} disabled={yo || guardando === u.id} onValueChange={(v) => cambiarRol(u, v as Rol)}>
 								<Select.Trigger class="w-full sm:w-44" aria-label="Rol de {u.email}">
