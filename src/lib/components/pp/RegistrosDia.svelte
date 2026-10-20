@@ -185,14 +185,14 @@
 			<p>No hay entradas registradas este día.</p>
 		</div>
 	{:else}
-		<div class="hidden rounded-xl border xl:block">
+		<!-- Tabla sólo en pantallas anchas (al lado está el QR): seis columnas, la empresa va debajo
+		     del alumno y el almuerzo debajo del ingreso, para que no haya que desplazarse de costado. -->
+		<div class="hidden rounded-xl border 2xl:block">
 			<Table.Root>
 				<Table.Header>
 					<Table.Row>
 						<Table.Head>Alumno</Table.Head>
-						<Table.Head>Empresa</Table.Head>
 						<Table.Head>Ingreso</Table.Head>
-						<Table.Head>Almuerzo</Table.Head>
 						<Table.Head>Entrada</Table.Head>
 						<Table.Head>Aula</Table.Head>
 						<Table.Head>Estado</Table.Head>
@@ -203,22 +203,26 @@
 					{#each registros as r (r.id)}
 						{@const e = estado(r)}
 						<Table.Row>
-							<Table.Cell class="max-w-72 truncate font-medium">{r.perfil?.email ?? '—'}</Table.Cell>
-							<Table.Cell>{r.perfil?.empresa?.nombre ?? '—'}</Table.Cell>
-							<Table.Cell class="text-muted-foreground tabular-nums">{fmtHora(r.perfil?.horario_entrada)}</Table.Cell>
-							<Table.Cell class="text-muted-foreground tabular-nums">
-								{r.perfil?.almuerzo_extra ? `+${MINUTOS_ALMUERZO} min · aula ${aula(r)}` : '—'}
+							<Table.Cell class="max-w-56">
+								<div class="truncate font-medium">{r.perfil?.email ?? '—'}</div>
+								<div class="truncate text-xs text-muted-foreground">{r.perfil?.empresa?.nombre ?? 'Sin empresa'}</div>
+							</Table.Cell>
+							<Table.Cell class="tabular-nums">
+								<div class="text-muted-foreground">{fmtHora(r.perfil?.horario_entrada)}</div>
+								{#if r.perfil?.almuerzo_extra}
+									<div class="text-xs text-muted-foreground">+{MINUTOS_ALMUERZO} almuerzo · aula {aula(r)}</div>
+								{/if}
 							</Table.Cell>
 							<Table.Cell class="tabular-nums">{fmtHora(r.hora_entrada_real)}</Table.Cell>
-							<Table.Cell class="max-w-48 whitespace-normal">{@render aulaCelda(r)}</Table.Cell>
+							<Table.Cell class="max-w-44 whitespace-normal">{@render aulaCelda(r)}</Table.Cell>
 							<Table.Cell><Badge variant="outline" class={e.clase}>{e.texto}</Badge></Table.Cell>
-							<Table.Cell class="max-w-64 whitespace-normal">{@render procesador(r)}</Table.Cell>
+							<Table.Cell class="max-w-52 whitespace-normal">{@render procesador(r)}</Table.Cell>
 						</Table.Row>
 					{/each}
 				</Table.Body>
 			</Table.Root>
 		</div>
-		<ul class="flex flex-col divide-y rounded-xl border xl:hidden">
+		<ul class="flex flex-col divide-y rounded-xl border 2xl:hidden">
 			{#each registros as r (r.id)}
 				{@const e = estado(r)}
 				<li class="flex flex-col gap-1.5 px-4 py-3">
@@ -230,8 +234,14 @@
 						<Badge variant="outline" class="shrink-0 {e.clase}">{e.texto}</Badge>
 					</div>
 					<div class="text-xs text-muted-foreground tabular-nums">
-						Ingreso {fmtHora(r.perfil?.horario_entrada)}{r.perfil?.almuerzo_extra ? ` · almuerzo, aula ${aula(r)}` : ''} · Entrada {fmtHora(r.hora_entrada_real)}{enAula(r) ? ` · Aula: ${enAula(r)!.texto}` : ''}
+						Ingreso {fmtHora(r.perfil?.horario_entrada)}{r.perfil?.almuerzo_extra ? ` · almuerzo, aula ${aula(r)}` : ''} · Entrada {fmtHora(r.hora_entrada_real)}
 					</div>
+					{#if enAula(r)}
+						{@const a = enAula(r)!}
+						<div class="text-xs text-muted-foreground">
+							Aula: <span class={cn('tabular-nums', a.tarde && 'font-medium text-red-700 dark:text-red-300')}>{a.texto}</span>{a.clase ? ` · ${a.clase}` : ''}
+						</div>
+					{/if}
 					{#if r.procesador}
 						<div class="flex items-start gap-2 text-xs text-muted-foreground">
 							<span class="pt-0.5">Procesador:</span>
