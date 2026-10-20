@@ -6,10 +6,9 @@ import { entradaAula } from '$lib/fechas';
 // Presentes del docente → tardes de pasantías. La intranet (api_presentes.asp, la mantiene otro
 // equipo) dice, por DNI y fecha, qué estado le puso el docente en cada clase y a qué hora. Para
 // cada pasante que fichó hoy se mira la clase de su hora de aula (ingreso, + 30 min si tiene
-// almuerzo). Si estaba cuando el docente tomó lista, llegó a tiempo (los docentes suelen tomar
-// lista bastante después de que empieza la clase: contar desde ahí daría tardes que no son). Si
-// lo agregaron después (presente o tarde marcado después de tomar lista), llegó tarde: los
-// minutos van desde la hora de aula (o el inicio de la clase, si empieza después) hasta esa marca.
+// almuerzo): si el docente le puso presente o tarde después de esa hora (o del inicio de la clase,
+// si empieza después), esos minutos son su tarde. Se cuenta desde la marca aunque el docente haya
+// tomado lista tarde (lo decidió el colegio).
 // Si superan lo que ya se anotó al fichar, se actualiza tardes_procesador (fuente 'presente') y el
 // envío de siempre (/api/cron/tardes) lo manda al procesador, con la hora del presente para que
 // caiga en esa clase. Usa la misma clave que api_tardes (INTRANET_TARDES_TOKEN).
@@ -118,15 +117,9 @@ export async function revisarPresentes(servicio: SupabaseClient<Database>, fecha
 		let minutos = 0;
 		let motivo = !clase ? 'No hay clase a la hora de aula' : 'Lista sin tomar o ausente';
 		if (clase && aula && clase.marcado && (clase.estado === 'presente' || clase.estado === 'tarde')) {
-			const agregadoDespues =
-				!!clase.lista_tomada && aMinutos(horaAR(clase.marcado)) > aMinutos(horaAR(clase.lista_tomada));
-			if (agregadoDespues) {
-				const referencia = Math.max(aMinutos(aula), aMinutos(clase.inicio));
-				minutos = Math.max(0, aMinutos(horaAR(clase.marcado)) - referencia);
-				motivo = `Lo marcaron a las ${horaAR(clase.marcado)}, después de tomar lista (${horaAR(clase.lista_tomada!)})`;
-			} else {
-				motivo = `Estaba cuando se tomó lista (${horaAR(clase.marcado)})`;
-			}
+			const referencia = Math.max(aMinutos(aula), aMinutos(clase.inicio));
+			minutos = Math.max(0, aMinutos(horaAR(clase.marcado)) - referencia);
+			motivo = `${clase.estado === 'tarde' ? 'Tarde' : 'Presente'} a las ${horaAR(clase.marcado)}`;
 		}
 		decisiones.push({
 			registro_id: r.id,
