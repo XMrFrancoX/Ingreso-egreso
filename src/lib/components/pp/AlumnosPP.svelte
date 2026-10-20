@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
+	import { FILTRO_ALUMNOS } from '$lib/auth.svelte';
 	import { confirmDialog } from '$lib/utils/confirm';
 	import { DIAS, DIA_NOMBRE, fmtHora, hoyISO, ordenarDias, type Dia } from '$lib/fechas';
 	import { exportarExcel, exportarPdf } from '$lib/exportar';
@@ -34,7 +35,7 @@
 	async function cargar() {
 		const [e, a, p] = await Promise.all([
 			supabase.from('empresas').select('id, nombre').order('nombre'),
-			supabase.from('perfiles').select('id, email, dni, empresa_id, horario_entrada, dias_habilitados(dia)').eq('rol', 'student').order('email'),
+			supabase.from('perfiles').select('id, email, dni, empresa_id, horario_entrada, dias_habilitados(dia)').or(FILTRO_ALUMNOS).order('email'),
 			supabase.from('alumnos_precargados').select('id, email, dni, empresa_id, horario_entrada, alumnos_precargados_dias(dia)').order('email')
 		]);
 		if (e.error || a.error || p.error) toast.error('No se pudieron cargar los alumnos de pasantías.');

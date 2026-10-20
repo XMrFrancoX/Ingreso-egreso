@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/auth.svelte';
+	import { auth, FILTRO_ALUMNOS } from '$lib/auth.svelte';
 	import { fmtHora, hoyISO, horaAhora } from '$lib/fechas';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
@@ -73,7 +73,7 @@
 	}
 
 	async function cargarAlumnos() {
-		const { data } = await supabase.from('perfiles').select('id, email, curso:curso_id(nombre)').eq('rol', 'student').order('email');
+		const { data } = await supabase.from('perfiles').select('id, email, curso:curso_id(nombre)').or(FILTRO_ALUMNOS).order('email');
 		alumnos = (data as unknown as AlumnoOpcion[]) ?? [];
 	}
 

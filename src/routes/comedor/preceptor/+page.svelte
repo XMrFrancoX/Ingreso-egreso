@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
+	import { FILTRO_ALUMNOS } from '$lib/auth.svelte';
 	import { diaDe, fmtHora, fmtMinutos, hoyISO, horaAhora, minutosDeDiferencia } from '$lib/fechas';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -52,7 +53,7 @@
 		void supabase
 			.from('perfiles')
 			.select('id, email, curso:curso_id(nombre)')
-			.eq('rol', 'student')
+			.or(FILTRO_ALUMNOS)
 			.order('email')
 			.then(({ data }) => (alumnos = (data as unknown as AlumnoOpcion[]) ?? []));
 		// Refresco automático mientras se mira el día de hoy.

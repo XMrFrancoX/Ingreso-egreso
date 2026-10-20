@@ -9,6 +9,10 @@ export type Seccion = 'comedor' | 'PP' | 'recreativo';
 export type Vista = 'staff' | 'alumno';
 const CLAVE_VISTA = 'ingresos-vista';
 
+// Filtro de perfiles para las listas de alumnos: los alumnos y el staff que también es alumno
+// (tiene curso), así un admin con pasantía o comedor también aparece para editarlo.
+export const FILTRO_ALUMNOS = 'rol.eq.student,curso_id.not.is.null';
+
 function leerVista(): Vista {
 	try {
 		return localStorage.getItem(CLAVE_VISTA) === 'alumno' ? 'alumno' : 'staff';
