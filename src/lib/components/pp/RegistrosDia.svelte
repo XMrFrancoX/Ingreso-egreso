@@ -9,6 +9,7 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import DatePicker from '$lib/components/DatePicker.svelte';
+	import { cn } from '$lib/utils/cn.js';
 	import { BriefcaseBusiness, RotateCcw } from '@lucide/svelte';
 
 	type Procesador = { estado: string; respuesta: string | null; intentos: number };
@@ -17,6 +18,8 @@
 		hora_entrada_real: string;
 		perfil: { email: string; horario_entrada: string | null; almuerzo_extra: boolean; empresa: { nombre: string } | null } | null;
 		procesador: Procesador | null;
+		// Lo que marcó el docente en la clase de su hora de aula (api_presentes de la intranet).
+		presente: { clase: string | null; estado: string; marcado: string | null; minutos: number } | null;
 	};
 
 	let fecha = $state(hoyISO());
@@ -28,7 +31,7 @@
 		const { data, error } = await supabase
 			.from('registros')
 			.select(
-				'id, hora_entrada_real, perfil:perfil_id(email, horario_entrada, almuerzo_extra, empresa:empresa_id(nombre)), procesador:tardes_procesador(estado, respuesta, intentos)'
+				'id, hora_entrada_real, perfil:perfil_id(email, horario_entrada, almuerzo_extra, empresa:empresa_id(nombre)), procesador:tardes_procesador(estado, respuesta, intentos), presente:presentes_pp(clase, estado, marcado, minutos)'
 			)
 			.eq('fecha', fecha)
 			.order('hora_entrada_real');
@@ -61,7 +64,23 @@
 	// La tarde se cuenta desde la hora de entrada al aula: el ingreso, más 30 min si tiene almuerzo
 	// (igual que lo que se manda al procesador).
 	const aula = (r: Registro) => entradaAula(r.perfil?.horario_entrada, r.perfil?.almuerzo_extra);
-	const minutosTarde = (r: Registro) => minutosDeDiferencia(r.hora_entrada_real, aula(r));
+	// Lo mayor entre la hora en que fichó y la hora en que el docente le puso el presente.
+	const minutosTarde = (r: Registro) => {
+		const fichada = minutosDeDiferencia(r.hora_entrada_real, aula(r));
+		const presente = r.presente?.minutos ?? 0;
+		return fichada === null ? (presente || null) : Math.max(fichada, presente);
+	};
+	const horaAR = (iso: string) =>
+		new Date(iso).toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+	function enAula(r: Registro) {
+		const p = r.presente;
+		if (!p) return null;
+		if ((p.estado === 'presente' || p.estado === 'tarde') && p.marcado) {
+			return { texto: `${p.estado === 'tarde' ? 'Tarde' : 'Presente'} ${horaAR(p.marcado)}`, clase: p.clase, tarde: p.minutos > 0 };
+		}
+		const textos: Record<string, string> = { ausente: 'Ausente', sin_tomar: 'Lista sin tomar', sin_clase: 'Sin clase a esa hora' };
+		return { texto: textos[p.estado] ?? p.estado, clase: p.clase, tarde: false };
+	}
 	let tardes = $derived(registros.filter((r) => (minutosTarde(r) ?? 0) > 0).length);
 
 	// Cómo quedó la tarde en el procesador de asistencias del colegio (la manda la base cada 5 min).
@@ -101,6 +120,18 @@
 		await cargar();
 	}
 </script>
+
+{#snippet aulaCelda(r: Registro)}
+	{@const a = enAula(r)}
+	{#if a}
+		<div class="grid gap-0.5">
+			<span class={cn('text-sm tabular-nums', a.tarde && 'font-medium text-red-700 dark:text-red-300')}>{a.texto}</span>
+			{#if a.clase}<span class="text-xs text-muted-foreground">{a.clase}</span>{/if}
+		</div>
+	{:else}
+		<span class="text-muted-foreground">—</span>
+	{/if}
+{/snippet}
 
 {#snippet procesador(r: Registro)}
 	{#if r.procesador}
@@ -154,15 +185,16 @@
 			<p>No hay entradas registradas este día.</p>
 		</div>
 	{:else}
-		<div class="hidden rounded-xl border xl:block">
+		<!-- Tabla sólo en pantallas anchas (al lado está el QR): seis columnas, la empresa va debajo
+		     del alumno y el almuerzo debajo del ingreso, para que no haya que desplazarse de costado. -->
+		<div class="hidden rounded-xl border 2xl:block">
 			<Table.Root>
 				<Table.Header>
 					<Table.Row>
 						<Table.Head>Alumno</Table.Head>
-						<Table.Head>Empresa</Table.Head>
 						<Table.Head>Ingreso</Table.Head>
-						<Table.Head>Almuerzo</Table.Head>
 						<Table.Head>Entrada</Table.Head>
+						<Table.Head>Aula</Table.Head>
 						<Table.Head>Estado</Table.Head>
 						<Table.Head>Procesador</Table.Head>
 					</Table.Row>
@@ -171,21 +203,26 @@
 					{#each registros as r (r.id)}
 						{@const e = estado(r)}
 						<Table.Row>
-							<Table.Cell class="max-w-72 truncate font-medium">{r.perfil?.email ?? '—'}</Table.Cell>
-							<Table.Cell>{r.perfil?.empresa?.nombre ?? '—'}</Table.Cell>
-							<Table.Cell class="text-muted-foreground tabular-nums">{fmtHora(r.perfil?.horario_entrada)}</Table.Cell>
-							<Table.Cell class="text-muted-foreground tabular-nums">
-								{r.perfil?.almuerzo_extra ? `+${MINUTOS_ALMUERZO} min · aula ${aula(r)}` : '—'}
+							<Table.Cell class="max-w-56">
+								<div class="truncate font-medium">{r.perfil?.email ?? '—'}</div>
+								<div class="truncate text-xs text-muted-foreground">{r.perfil?.empresa?.nombre ?? 'Sin empresa'}</div>
+							</Table.Cell>
+							<Table.Cell class="tabular-nums">
+								<div class="text-muted-foreground">{fmtHora(r.perfil?.horario_entrada)}</div>
+								{#if r.perfil?.almuerzo_extra}
+									<div class="text-xs text-muted-foreground">+{MINUTOS_ALMUERZO} almuerzo · aula {aula(r)}</div>
+								{/if}
 							</Table.Cell>
 							<Table.Cell class="tabular-nums">{fmtHora(r.hora_entrada_real)}</Table.Cell>
+							<Table.Cell class="max-w-44 whitespace-normal">{@render aulaCelda(r)}</Table.Cell>
 							<Table.Cell><Badge variant="outline" class={e.clase}>{e.texto}</Badge></Table.Cell>
-							<Table.Cell class="max-w-64 whitespace-normal">{@render procesador(r)}</Table.Cell>
+							<Table.Cell class="max-w-52 whitespace-normal">{@render procesador(r)}</Table.Cell>
 						</Table.Row>
 					{/each}
 				</Table.Body>
 			</Table.Root>
 		</div>
-		<ul class="flex flex-col divide-y rounded-xl border xl:hidden">
+		<ul class="flex flex-col divide-y rounded-xl border 2xl:hidden">
 			{#each registros as r (r.id)}
 				{@const e = estado(r)}
 				<li class="flex flex-col gap-1.5 px-4 py-3">
@@ -199,6 +236,12 @@
 					<div class="text-xs text-muted-foreground tabular-nums">
 						Ingreso {fmtHora(r.perfil?.horario_entrada)}{r.perfil?.almuerzo_extra ? ` · almuerzo, aula ${aula(r)}` : ''} · Entrada {fmtHora(r.hora_entrada_real)}
 					</div>
+					{#if enAula(r)}
+						{@const a = enAula(r)!}
+						<div class="text-xs text-muted-foreground">
+							Aula: <span class={cn('tabular-nums', a.tarde && 'font-medium text-red-700 dark:text-red-300')}>{a.texto}</span>{a.clase ? ` · ${a.clase}` : ''}
+						</div>
+					{/if}
 					{#if r.procesador}
 						<div class="flex items-start gap-2 text-xs text-muted-foreground">
 							<span class="pt-0.5">Procesador:</span>
