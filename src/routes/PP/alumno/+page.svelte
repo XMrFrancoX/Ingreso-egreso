@@ -3,7 +3,7 @@
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
 	import { auth } from '$lib/auth.svelte';
-	import { DIAS, DIA_NOMBRE, diaDe, fmtHora, hoyISO, horaAhora, ordenarDias, type Dia } from '$lib/fechas';
+	import { DIAS, DIA_NOMBRE, diaDe, entradaAula, fmtHora, hoyISO, horaAhora, MINUTOS_ALMUERZO, ordenarDias, type Dia } from '$lib/fechas';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
@@ -14,6 +14,8 @@
 	let cargando = $state(true);
 	let empresa = $state<string | null>(null);
 	let horario = $state<string | null>(null);
+	// Con almuerzo tiene que estar en el aula 30 min después del ingreso (la tarde se cuenta desde ahí).
+	let almuerzo = $state(false);
 	let dias = $state<Dia[]>([]);
 	let registroHoy = $state<{ hora_entrada_real: string } | null>(null);
 	let qrValidado = $state(false);
@@ -29,13 +31,14 @@
 		if (errPre) console.error('Error aplicando la precarga:', errPre);
 
 		const [p, d, r] = await Promise.all([
-			supabase.from('perfiles').select('horario_entrada, empresa:empresa_id(nombre)').eq('id', id).single(),
+			supabase.from('perfiles').select('horario_entrada, almuerzo_extra, empresa:empresa_id(nombre)').eq('id', id).single(),
 			supabase.from('dias_habilitados').select('dia').eq('perfil_id', id),
 			supabase.from('registros').select('hora_entrada_real').eq('perfil_id', id).eq('fecha', hoy).maybeSingle()
 		]);
 		if (p.error || d.error || r.error) toast.error('No se pudo cargar tu pasantía. Probá recargar.');
 		empresa = (p.data?.empresa as { nombre: string } | null)?.nombre ?? null;
 		horario = p.data?.horario_entrada ?? null;
+		almuerzo = p.data?.almuerzo_extra ?? false;
 		dias = ordenarDias(d.data);
 		registroHoy = r.data;
 		cargando = false;
@@ -88,6 +91,11 @@
 				<div class="px-5 py-4">
 					<div class="text-xs text-muted-foreground">Horario de entrada</div>
 					<div class="font-semibold tabular-nums">{horario ? fmtHora(horario) : 'Sin definir'}</div>
+					{#if horario && almuerzo}
+						<div class="text-xs text-muted-foreground">
+							{MINUTOS_ALMUERZO} min de almuerzo · en el aula a las {entradaAula(horario, true)}
+						</div>
+					{/if}
 				</div>
 				<div class="px-5 py-4">
 					<div class="text-xs text-muted-foreground">Días</div>
@@ -142,7 +150,7 @@
 					<div class="grid gap-3">
 						<p class="flex items-center gap-2 text-sm text-muted-foreground">
 							<Clock class="size-4" />
-							{DIA_NOMBRE[diaDe(hoy) as Dia]} · entrada esperada {fmtHora(horario)}
+							{DIA_NOMBRE[diaDe(hoy) as Dia]} · entrada {fmtHora(horario)}{almuerzo ? ` · en el aula a las ${entradaAula(horario, true)}` : ''}
 						</p>
 						<Button size="lg" class="w-full" onclick={registrar} disabled={registrando}>
 							{#if registrando}<LoaderCircle class="animate-spin" />{/if}

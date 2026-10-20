@@ -36,6 +36,21 @@ export function fmtFecha(fechaISO: string) {
 	return new Date(`${fechaISO}T12:00:00`).toLocaleDateString('es-AR', { weekday: 'short', day: '2-digit', month: '2-digit' });
 }
 
+/** Pasantías: minutos para almorzar de los alumnos con el tilde de almuerzo (igual que en la base). */
+export const MINUTOS_ALMUERZO = 30;
+
+/**
+ * Pasantías: hora a la que tiene que estar en el aula: su horario de ingreso, más el almuerzo si
+ * lo tiene ("12:30" con almuerzo → "13:00"). La tarde se cuenta desde acá.
+ */
+export function entradaAula(horario: string | null | undefined, almuerzo: boolean | null | undefined) {
+	if (!horario) return null;
+	if (!almuerzo) return horario.slice(0, 5);
+	const [h, m] = horario.split(':').map(Number);
+	const total = h * 60 + m + MINUTOS_ALMUERZO;
+	return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
 /** Minutos de diferencia entre una hora real y la esperada ("HH:MM[:SS]"); positivo = tarde. */
 export function minutosDeDiferencia(real: string | null | undefined, esperada: string | null | undefined) {
 	if (!real || !esperada) return null;

@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
-	import { fmtHora, fmtMinutos, hoyISO, minutosDeDiferencia } from '$lib/fechas';
+	import { entradaAula, fmtHora, fmtMinutos, hoyISO, MINUTOS_ALMUERZO, minutosDeDiferencia } from '$lib/fechas';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -15,7 +15,7 @@
 	type Registro = {
 		id: string;
 		hora_entrada_real: string;
-		perfil: { email: string; horario_entrada: string | null; empresa: { nombre: string } | null } | null;
+		perfil: { email: string; horario_entrada: string | null; almuerzo_extra: boolean; empresa: { nombre: string } | null } | null;
 		procesador: Procesador | null;
 	};
 
@@ -28,7 +28,7 @@
 		const { data, error } = await supabase
 			.from('registros')
 			.select(
-				'id, hora_entrada_real, perfil:perfil_id(email, horario_entrada, empresa:empresa_id(nombre)), procesador:tardes_procesador(estado, respuesta, intentos)'
+				'id, hora_entrada_real, perfil:perfil_id(email, horario_entrada, almuerzo_extra, empresa:empresa_id(nombre)), procesador:tardes_procesador(estado, respuesta, intentos)'
 			)
 			.eq('fecha', fecha)
 			.order('hora_entrada_real');
@@ -51,14 +51,18 @@
 	onDestroy(() => clearInterval(reloj));
 
 	function estado(r: Registro) {
-		const tarde = minutosDeDiferencia(r.hora_entrada_real, r.perfil?.horario_entrada);
+		const tarde = minutosTarde(r);
 		if (tarde !== null && tarde > 0) {
 			return { texto: `Tarde ${fmtMinutos(tarde)}`, clase: 'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-300' };
 		}
 		return { texto: 'A horario', clase: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' };
 	}
 
-	let tardes = $derived(registros.filter((r) => (minutosDeDiferencia(r.hora_entrada_real, r.perfil?.horario_entrada) ?? 0) > 0).length);
+	// La tarde se cuenta desde la hora de entrada al aula: el ingreso, más 30 min si tiene almuerzo
+	// (igual que lo que se manda al procesador).
+	const aula = (r: Registro) => entradaAula(r.perfil?.horario_entrada, r.perfil?.almuerzo_extra);
+	const minutosTarde = (r: Registro) => minutosDeDiferencia(r.hora_entrada_real, aula(r));
+	let tardes = $derived(registros.filter((r) => (minutosTarde(r) ?? 0) > 0).length);
 
 	// Cómo quedó la tarde en el procesador de asistencias del colegio (la manda la base cada 5 min).
 	const GRIS = 'border-border bg-muted text-muted-foreground';
@@ -156,7 +160,8 @@
 					<Table.Row>
 						<Table.Head>Alumno</Table.Head>
 						<Table.Head>Empresa</Table.Head>
-						<Table.Head>Esperada</Table.Head>
+						<Table.Head>Ingreso</Table.Head>
+						<Table.Head>Almuerzo</Table.Head>
 						<Table.Head>Entrada</Table.Head>
 						<Table.Head>Estado</Table.Head>
 						<Table.Head>Procesador</Table.Head>
@@ -169,6 +174,9 @@
 							<Table.Cell class="max-w-72 truncate font-medium">{r.perfil?.email ?? '—'}</Table.Cell>
 							<Table.Cell>{r.perfil?.empresa?.nombre ?? '—'}</Table.Cell>
 							<Table.Cell class="text-muted-foreground tabular-nums">{fmtHora(r.perfil?.horario_entrada)}</Table.Cell>
+							<Table.Cell class="text-muted-foreground tabular-nums">
+								{r.perfil?.almuerzo_extra ? `+${MINUTOS_ALMUERZO} min · aula ${aula(r)}` : '—'}
+							</Table.Cell>
 							<Table.Cell class="tabular-nums">{fmtHora(r.hora_entrada_real)}</Table.Cell>
 							<Table.Cell><Badge variant="outline" class={e.clase}>{e.texto}</Badge></Table.Cell>
 							<Table.Cell class="max-w-64 whitespace-normal">{@render procesador(r)}</Table.Cell>
@@ -189,7 +197,7 @@
 						<Badge variant="outline" class="shrink-0 {e.clase}">{e.texto}</Badge>
 					</div>
 					<div class="text-xs text-muted-foreground tabular-nums">
-						Esperada {fmtHora(r.perfil?.horario_entrada)} · Entrada {fmtHora(r.hora_entrada_real)}
+						Ingreso {fmtHora(r.perfil?.horario_entrada)}{r.perfil?.almuerzo_extra ? ` · almuerzo, aula ${aula(r)}` : ''} · Entrada {fmtHora(r.hora_entrada_real)}
 					</div>
 					{#if r.procesador}
 						<div class="flex items-start gap-2 text-xs text-muted-foreground">

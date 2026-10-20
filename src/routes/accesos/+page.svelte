@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/auth.svelte';
+	import { auth, FILTRO_ALUMNOS } from '$lib/auth.svelte';
 	import { confirmDialog } from '$lib/utils/confirm';
 	import { DIAS, DIA_NOMBRE, type Dia } from '$lib/fechas';
 	import * as Card from '$lib/components/ui/card/index.js';
@@ -36,8 +36,7 @@
 		const [c, p, a] = await Promise.all([
 			supabase.from('cursos').select('id, nombre, horarios:cursos_horarios(dia, hora_regreso)').order('nombre'),
 			supabase.from('seccion_cursos_permitidos').select('seccion, curso_id'),
-			// Los alumnos y el staff que también es alumno (doble rol: tiene curso).
-			supabase.from('perfiles').select('id, email, curso_id').or('rol.eq.student,curso_id.not.is.null').order('email')
+			supabase.from('perfiles').select('id, email, curso_id').or(FILTRO_ALUMNOS).order('email')
 		]);
 		if (c.error || p.error || a.error) toast.error('No se pudieron cargar los datos. Probá recargar.');
 		cursos = (c.data ?? []).map((cu) => ({

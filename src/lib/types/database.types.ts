@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       alumnos_precargados: {
         Row: {
+          almuerzo_extra: boolean
           created_at: string | null
           dni: string | null
           email: string
@@ -24,6 +25,7 @@ export type Database = {
           id: string
         }
         Insert: {
+          almuerzo_extra?: boolean
           created_at?: string | null
           dni?: string | null
           email: string
@@ -32,6 +34,7 @@ export type Database = {
           id?: string
         }
         Update: {
+          almuerzo_extra?: boolean
           created_at?: string | null
           dni?: string | null
           email?: string
@@ -212,6 +215,7 @@ export type Database = {
       }
       perfiles: {
         Row: {
+          almuerzo_extra: boolean
           created_at: string
           curso_id: string | null
           dni: string | null
@@ -222,6 +226,7 @@ export type Database = {
           rol: string | null
         }
         Insert: {
+          almuerzo_extra?: boolean
           created_at?: string
           curso_id?: string | null
           dni?: string | null
@@ -232,6 +237,7 @@ export type Database = {
           rol?: string | null
         }
         Update: {
+          almuerzo_extra?: boolean
           created_at?: string
           curso_id?: string | null
           dni?: string | null
@@ -486,6 +492,7 @@ export type Database = {
       disparar_tardes_procesador: { Args: never; Returns: number }
       es_admin: { Args: never; Returns: boolean }
       es_staff: { Args: never; Returns: boolean }
+      minutos_almuerzo_pp: { Args: never; Returns: number }
       minutos_tarde: {
         Args: { p_esperada: string; p_real: string }
         Returns: number

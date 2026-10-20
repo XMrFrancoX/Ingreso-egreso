@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
 	import { supabase } from '$lib/supabase';
-	import { fmtHora, fmtMinutos, hoyISO, minutosDeDiferencia } from '$lib/fechas';
+	import { entradaAula, fmtHora, fmtMinutos, hoyISO, MINUTOS_ALMUERZO, minutosDeDiferencia } from '$lib/fechas';
 	import { exportarExcel, exportarPdf } from '$lib/exportar';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -25,7 +25,7 @@
 		} else desde = hoyISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1, 12));
 	}
 
-	type Fila = { fecha: string; alumno: string; empresa: string; esperada: string; entrada: string; estado: string };
+	type Fila = { fecha: string; alumno: string; empresa: string; ingreso: string; almuerzo: string; entrada: string; estado: string };
 
 	async function datos(): Promise<Fila[] | null> {
 		if (desde > hasta) {
@@ -34,7 +34,7 @@
 		}
 		const { data, error } = await supabase
 			.from('registros')
-			.select('fecha, hora_entrada_real, perfil:perfil_id(email, horario_entrada, empresa:empresa_id(nombre))')
+			.select('fecha, hora_entrada_real, perfil:perfil_id(email, horario_entrada, almuerzo_extra, empresa:empresa_id(nombre))')
 			.gte('fecha', desde)
 			.lte('fecha', hasta)
 			.order('fecha')
@@ -43,13 +43,15 @@
 			toast.error('No se pudo generar el reporte: ' + error.message);
 			return null;
 		}
-		const filas = (data as unknown as { fecha: string; hora_entrada_real: string; perfil: { email: string; horario_entrada: string | null; empresa: { nombre: string } | null } | null }[]).map((r) => {
-			const tarde = minutosDeDiferencia(r.hora_entrada_real, r.perfil?.horario_entrada);
+		const filas = (data as unknown as { fecha: string; hora_entrada_real: string; perfil: { email: string; horario_entrada: string | null; almuerzo_extra: boolean; empresa: { nombre: string } | null } | null }[]).map((r) => {
+			// Tarde desde la entrada al aula: ingreso, más el almuerzo si lo tiene.
+			const tarde = minutosDeDiferencia(r.hora_entrada_real, entradaAula(r.perfil?.horario_entrada, r.perfil?.almuerzo_extra));
 			return {
 				fecha: r.fecha,
 				alumno: r.perfil?.email ?? '—',
 				empresa: r.perfil?.empresa?.nombre ?? '—',
-				esperada: fmtHora(r.perfil?.horario_entrada),
+				ingreso: fmtHora(r.perfil?.horario_entrada),
+				almuerzo: r.perfil?.almuerzo_extra ? `+${MINUTOS_ALMUERZO} min (aula ${entradaAula(r.perfil.horario_entrada, true) ?? '—'})` : '',
 				entrada: fmtHora(r.hora_entrada_real),
 				estado: tarde !== null && tarde > 0 ? `Tarde ${fmtMinutos(tarde)}` : 'A horario'
 			};
@@ -71,16 +73,16 @@
 				await exportarExcel(
 					`${nombre}.xlsx`,
 					'Registros',
-					filas.map((f) => ({ Fecha: f.fecha, Alumno: f.alumno, Empresa: f.empresa, 'Entrada esperada': f.esperada, 'Entrada real': f.entrada, Estado: f.estado })),
-					[12, 32, 22, 16, 14, 18]
+					filas.map((f) => ({ Fecha: f.fecha, Alumno: f.alumno, Empresa: f.empresa, Ingreso: f.ingreso, Almuerzo: f.almuerzo, 'Entrada real': f.entrada, Estado: f.estado })),
+					[12, 32, 22, 10, 20, 14, 18]
 				);
 			} else {
 				await exportarPdf({
 					archivo: `${nombre}.pdf`,
 					titulo: 'Pasantías (PP) — entradas registradas',
 					subtitulo: `Escuela Técnica Philips — del ${desde} al ${hasta}`,
-					columnas: ['Fecha', 'Alumno', 'Empresa', 'Esperada', 'Entrada', 'Estado'],
-					filas: filas.map((f) => [f.fecha, f.alumno, f.empresa, f.esperada, f.entrada, f.estado])
+					columnas: ['Fecha', 'Alumno', 'Empresa', 'Ingreso', 'Almuerzo', 'Entrada', 'Estado'],
+					filas: filas.map((f) => [f.fecha, f.alumno, f.empresa, f.ingreso, f.almuerzo, f.entrada, f.estado])
 				});
 			}
 			toast.success(`${filas.length} registros exportados`);
