@@ -4,7 +4,7 @@
 	import { supabase } from '$lib/supabase';
 	import { FILTRO_ALUMNOS } from '$lib/auth.svelte';
 	import { confirmDialog } from '$lib/utils/confirm';
-	import { DIAS, DIA_NOMBRE, fmtHora, hoyISO, ordenarDias, type Dia } from '$lib/fechas';
+	import { DIAS, DIA_NOMBRE, entradaAula, fmtHora, hoyISO, MINUTOS_ALMUERZO, ordenarDias, type Dia } from '$lib/fechas';
 	import { exportarExcel, exportarPdf } from '$lib/exportar';
 	import * as Card from '$lib/components/ui/card/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
@@ -13,14 +13,16 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton/index.js';
 	import TimePicker from '$lib/components/TimePicker.svelte';
 	import { Plus, Pencil, UserMinus, Trash2, Search, LoaderCircle, FileSpreadsheet, FileText, Users, Hourglass } from '@lucide/svelte';
 	import { cn } from '$lib/utils/cn.js';
 
 	type Empresa = { id: string; nombre: string };
-	type AlumnoPP = { id: string; email: string; dni: string; empresa_id: string | null; horario: string; dias: Dia[] };
-	type Precargado = { id: string; email: string; dni: string; empresa_id: string | null; horario: string; dias: Dia[] };
+	// almuerzo: tiene 30 min para almorzar (tiene que estar en el aula 30 min después del ingreso).
+	type AlumnoPP = { id: string; email: string; dni: string; empresa_id: string | null; horario: string; almuerzo: boolean; dias: Dia[] };
+	type Precargado = { id: string; email: string; dni: string; empresa_id: string | null; horario: string; almuerzo: boolean; dias: Dia[] };
 
 	let empresas = $state<Empresa[]>([]);
 	let alumnos = $state<AlumnoPP[]>([]);
@@ -35,8 +37,8 @@
 	async function cargar() {
 		const [e, a, p] = await Promise.all([
 			supabase.from('empresas').select('id, nombre').order('nombre'),
-			supabase.from('perfiles').select('id, email, dni, empresa_id, horario_entrada, dias_habilitados(dia)').or(FILTRO_ALUMNOS).order('email'),
-			supabase.from('alumnos_precargados').select('id, email, dni, empresa_id, horario_entrada, alumnos_precargados_dias(dia)').order('email')
+			supabase.from('perfiles').select('id, email, dni, empresa_id, horario_entrada, almuerzo_extra, dias_habilitados(dia)').or(FILTRO_ALUMNOS).order('email'),
+			supabase.from('alumnos_precargados').select('id, email, dni, empresa_id, horario_entrada, almuerzo_extra, alumnos_precargados_dias(dia)').order('email')
 		]);
 		if (e.error || a.error || p.error) toast.error('No se pudieron cargar los alumnos de pasantías.');
 		empresas = e.data ?? [];
@@ -48,6 +50,7 @@
 				dni: x.dni ?? '',
 				empresa_id: x.empresa_id,
 				horario: x.horario_entrada?.slice(0, 5) ?? '',
+				almuerzo: x.almuerzo_extra,
 				dias: ordenarDias(x.dias_habilitados)
 			}))
 			.filter((x) => x.empresa_id || x.horario || x.dias.length);
@@ -57,6 +60,7 @@
 			dni: x.dni ?? '',
 			empresa_id: x.empresa_id,
 			horario: x.horario_entrada?.slice(0, 5) ?? '',
+			almuerzo: x.almuerzo_extra,
 			dias: ordenarDias(x.alumnos_precargados_dias)
 		}));
 		cargando = false;
@@ -77,6 +81,7 @@
 	let dni = $state('');
 	let empresaId = $state('');
 	let horario = $state('');
+	let almuerzo = $state(false);
 	let dias = $state<Dia[]>([]);
 	let guardando = $state(false);
 
@@ -86,6 +91,7 @@
 		dni = '';
 		empresaId = '';
 		horario = '';
+		almuerzo = false;
 		dias = [];
 	}
 
@@ -95,6 +101,7 @@
 		dni = a.dni;
 		empresaId = a.empresa_id ?? '';
 		horario = a.horario;
+		almuerzo = a.almuerzo;
 		dias = [...a.dias];
 	}
 
@@ -105,7 +112,7 @@
 	async function guardarPerfil(perfilId: string, dniLimpio: string | null) {
 		const { error } = await supabase
 			.from('perfiles')
-			.update({ dni: dniLimpio, empresa_id: empresaId || null, horario_entrada: horario || null })
+			.update({ dni: dniLimpio, empresa_id: empresaId || null, horario_entrada: horario || null, almuerzo_extra: almuerzo })
 			.eq('id', perfilId);
 		if (error) throw error;
 		const del = await supabase.from('dias_habilitados').delete().eq('perfil_id', perfilId);
@@ -137,7 +144,7 @@
 				} else {
 					const { data: pre, error } = await supabase
 						.from('alumnos_precargados')
-						.upsert({ email: mail, dni: dniLimpio, empresa_id: empresaId || null, horario_entrada: horario || null }, { onConflict: 'email' })
+						.upsert({ email: mail, dni: dniLimpio, empresa_id: empresaId || null, horario_entrada: horario || null, almuerzo_extra: almuerzo }, { onConflict: 'email' })
 						.select('id')
 						.single();
 					if (error) throw error;
@@ -162,13 +169,13 @@
 	async function quitar(a: AlumnoPP) {
 		const ok = await confirmDialog({
 			title: `¿Quitar a ${a.email} de pasantías?`,
-			description: 'Se le borran la empresa, el horario y los días. Sigue pudiendo usar comedor y recreativo, y sus entradas registradas quedan.',
+			description: 'Se le borran la empresa, el horario, el almuerzo y los días. Sigue pudiendo usar comedor y recreativo, y sus entradas registradas quedan.',
 			confirmLabel: 'Quitar',
 			destructive: true
 		});
 		if (!ok) return;
 		const del = await supabase.from('dias_habilitados').delete().eq('perfil_id', a.id);
-		const { error } = await supabase.from('perfiles').update({ empresa_id: null, horario_entrada: null }).eq('id', a.id);
+		const { error } = await supabase.from('perfiles').update({ empresa_id: null, horario_entrada: null, almuerzo_extra: false }).eq('id', a.id);
 		if (del.error || error) return toast.error('No se pudo quitar: ' + (del.error ?? error)!.message);
 		toast.success(`${a.email} quitado de pasantías`);
 		await cargar();
@@ -201,18 +208,19 @@
 						DNI: a.dni ? Number(a.dni) : '',
 						Empresa: nombreEmpresa(a.empresa_id),
 						'Horario de entrada': fmtHora(a.horario),
+						Almuerzo: a.almuerzo ? `+${MINUTOS_ALMUERZO} min (aula ${entradaAula(a.horario, true) ?? '—'})` : '',
 						...Object.fromEntries(DIAS.map((d) => [DIA_NOMBRE[d], a.dias.includes(d) ? 'Sí' : '']))
 					})),
-					[32, 12, 22, 16, 8, 8, 10, 8, 8]
+					[32, 12, 22, 16, 20, 8, 8, 10, 8, 8]
 				);
 			} else {
 				await exportarPdf({
 					archivo: `${nombre}.pdf`,
 					titulo: 'Pasantías (PP) — alumnos',
 					subtitulo: `Escuela Técnica Philips — ${new Date().toLocaleDateString('es-AR')}`,
-					columnas: ['Mail', 'DNI', 'Empresa', 'Entrada', ...DIAS],
-					filas: alumnos.map((a) => [a.email, fmtDni(a.dni), nombreEmpresa(a.empresa_id), fmtHora(a.horario), ...DIAS.map((d) => (a.dias.includes(d) ? 'Sí' : ''))]),
-					centradas: [4, 5, 6, 7, 8]
+					columnas: ['Mail', 'DNI', 'Empresa', 'Entrada', 'Almuerzo', ...DIAS],
+					filas: alumnos.map((a) => [a.email, fmtDni(a.dni), nombreEmpresa(a.empresa_id), fmtHora(a.horario), a.almuerzo ? `+${MINUTOS_ALMUERZO} min` : '', ...DIAS.map((d) => (a.dias.includes(d) ? 'Sí' : ''))]),
+					centradas: [4, 5, 6, 7, 8, 9]
 				});
 			}
 		} catch (e) {
@@ -278,7 +286,7 @@
 									{:else}
 										<Badge variant="outline" class="border-amber-500/50 text-amber-700 dark:text-amber-400">Sin DNI</Badge>
 									{/if}
-									<span>{nombreEmpresa(a.empresa_id)} · entrada {fmtHora(a.horario)}</span>
+									<span>{nombreEmpresa(a.empresa_id)} · entrada {fmtHora(a.horario)}{a.almuerzo ? ` · almuerzo, aula ${entradaAula(a.horario, true) ?? '—'}` : ''}</span>
 								</div>
 							</div>
 							{@render pastillasDias(a.dias)}
@@ -312,7 +320,7 @@
 							<div class="min-w-0 flex-1">
 								<div class="truncate">{p.email}</div>
 								<div class="text-sm text-muted-foreground">
-									{p.dni ? `DNI ${fmtDni(p.dni)}` : 'Sin DNI'} · {nombreEmpresa(p.empresa_id)} · entrada {fmtHora(p.horario)}
+									{p.dni ? `DNI ${fmtDni(p.dni)}` : 'Sin DNI'} · {nombreEmpresa(p.empresa_id)} · entrada {fmtHora(p.horario)}{p.almuerzo ? ` · almuerzo +${MINUTOS_ALMUERZO} min` : ''}
 								</div>
 							</div>
 							{@render pastillasDias(p.dias)}
@@ -368,6 +376,18 @@
 			<div class="grid gap-2">
 				<Label>Horario de entrada</Label>
 				<TimePicker bind:value={horario} fromHour={6} toHour={20} />
+			</div>
+			<!-- Almuerzo: la tarde se cuenta desde el ingreso + 30 min (lo que se manda al procesador). -->
+			<div class="flex items-start gap-3">
+				<Checkbox id="pp-almuerzo" bind:checked={almuerzo} class="mt-0.5" />
+				<div class="grid gap-1">
+					<Label for="pp-almuerzo">{MINUTOS_ALMUERZO} min de almuerzo</Label>
+					<p class="text-xs text-muted-foreground">
+						{horario
+							? `Tiene que estar en el aula a las ${entradaAula(horario, true)}: si entra después, se le anota tarde desde ahí.`
+							: `Tiene que estar en el aula ${MINUTOS_ALMUERZO} min después del ingreso.`}
+					</p>
+				</div>
 			</div>
 			<div class="grid gap-2">
 				<Label>Días</Label>
