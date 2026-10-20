@@ -264,6 +264,47 @@ export type Database = {
           },
         ]
       }
+      presentes_pp: {
+        Row: {
+          clase: string | null
+          clase_inicio: string | null
+          estado: string
+          lista_tomada: string | null
+          marcado: string | null
+          minutos: number
+          registro_id: string
+          revisado_en: string
+        }
+        Insert: {
+          clase?: string | null
+          clase_inicio?: string | null
+          estado: string
+          lista_tomada?: string | null
+          marcado?: string | null
+          minutos?: number
+          registro_id: string
+          revisado_en?: string
+        }
+        Update: {
+          clase?: string | null
+          clase_inicio?: string | null
+          estado?: string
+          lista_tomada?: string | null
+          marcado?: string | null
+          minutos?: number
+          registro_id?: string
+          revisado_en?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "presentes_pp_registro_id_fkey"
+            columns: ["registro_id"]
+            isOneToOne: true
+            referencedRelation: "registros"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       recreativo_items: {
         Row: {
           activo: boolean | null
@@ -437,6 +478,7 @@ export type Database = {
           actualizado_en: string
           enviado_en: string | null
           estado: string
+          fuente: string
           hora_fichada: string
           intentos: number
           minutos: number
@@ -448,6 +490,7 @@ export type Database = {
           actualizado_en?: string
           enviado_en?: string | null
           estado?: string
+          fuente?: string
           hora_fichada: string
           intentos?: number
           minutos: number
@@ -459,6 +502,7 @@ export type Database = {
           actualizado_en?: string
           enviado_en?: string | null
           estado?: string
+          fuente?: string
           hora_fichada?: string
           intentos?: number
           minutos?: number
@@ -489,6 +533,7 @@ export type Database = {
     }
     Functions: {
       aplicar_precarga_pp: { Args: never; Returns: boolean }
+      disparar_presentes_pp: { Args: never; Returns: number }
       disparar_tardes_procesador: { Args: never; Returns: number }
       es_admin: { Args: never; Returns: boolean }
       es_staff: { Args: never; Returns: boolean }
