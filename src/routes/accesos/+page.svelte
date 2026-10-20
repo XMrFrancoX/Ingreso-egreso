@@ -36,7 +36,8 @@
 		const [c, p, a] = await Promise.all([
 			supabase.from('cursos').select('id, nombre, horarios:cursos_horarios(dia, hora_regreso)').order('nombre'),
 			supabase.from('seccion_cursos_permitidos').select('seccion, curso_id'),
-			supabase.from('perfiles').select('id, email, curso_id').eq('rol', 'student').order('email')
+			// Los alumnos y el staff que también es alumno (doble rol: tiene curso).
+			supabase.from('perfiles').select('id, email, curso_id').or('rol.eq.student,curso_id.not.is.null').order('email')
 		]);
 		if (c.error || p.error || a.error) toast.error('No se pudieron cargar los datos. Probá recargar.');
 		cursos = (c.data ?? []).map((cu) => ({

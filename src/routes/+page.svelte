@@ -88,15 +88,15 @@
 	<div>
 		<h1 class="text-2xl font-semibold tracking-tight md:text-3xl">Hola, {nombre}</h1>
 		<p class="text-muted-foreground">
-			{#if auth.perfil?.rol === 'student'}
+			{#if auth.perfil && auth.rol === 'student'}
 				{auth.perfil.curso ? `Curso ${auth.perfil.curso.nombre}` : 'Alumno'}
 			{:else if auth.perfil}
-				{ROL_NOMBRE[auth.perfil.rol]}
+				{ROL_NOMBRE[auth.rol]}
 			{/if}
 		</p>
 	</div>
 
-	{#if auth.perfil?.rol === 'student' && !auth.perfil.curso_id}
+	{#if auth.perfil && auth.rol === 'student' && !auth.perfil.curso_id}
 		<div class="flex items-start gap-2 rounded-lg border bg-muted/50 px-4 py-3 text-sm">
 			<Info class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 			<p>

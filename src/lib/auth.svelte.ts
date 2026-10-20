@@ -4,6 +4,18 @@ import { supabase } from '$lib/supabase';
 
 export type Rol = 'student' | 'preceptor' | 'admin';
 export type Seccion = 'comedor' | 'PP' | 'recreativo';
+// Doble rol: un preceptor o admin que además es alumno (tiene curso) elige con qué rol usar la
+// app desde el menú de su usuario. Se recuerda en este dispositivo.
+export type Vista = 'staff' | 'alumno';
+const CLAVE_VISTA = 'ingresos-vista';
+
+function leerVista(): Vista {
+	try {
+		return localStorage.getItem(CLAVE_VISTA) === 'alumno' ? 'alumno' : 'staff';
+	} catch {
+		return 'staff';
+	}
+}
 
 export interface Perfil {
 	id: string;
@@ -29,17 +41,28 @@ class Auth {
 	// Secciones habilitadas para el curso del alumno (el staff ve todas).
 	secciones = $state<Set<Seccion>>(new Set());
 	cargando = $state(true);
+	vista = $state<Vista>(typeof window === 'undefined' ? 'staff' : leerVista());
 
 	#iniciado = false;
 
 	get email() {
 		return this.session?.user.email ?? '';
 	}
+	// Preceptor o admin que también es alumno (tiene curso): puede usar la app como alumno.
+	get puedeCambiarVista() {
+		return !!this.perfil && this.perfil.rol !== 'student' && !!this.perfil.curso_id;
+	}
+	// Rol con el que se está usando la app (el real, salvo que haya elegido la vista de alumno).
+	// Las pantallas deciden con esto; los permisos de la base siguen siendo los del rol real.
+	get rol(): Rol {
+		if (!this.perfil) return 'student';
+		return this.puedeCambiarVista && this.vista === 'alumno' ? 'student' : this.perfil.rol;
+	}
 	get esStaff() {
-		return this.perfil?.rol === 'preceptor' || this.perfil?.rol === 'admin';
+		return this.rol === 'preceptor' || this.rol === 'admin';
 	}
 	get esAdmin() {
-		return this.perfil?.rol === 'admin';
+		return this.rol === 'admin';
 	}
 	puedeVer(seccion: Seccion) {
 		return this.esStaff || this.secciones.has(seccion);
@@ -93,7 +116,7 @@ class Auth {
 		try {
 			const perfil = await cargarPerfil(sesion);
 			this.perfil = perfil;
-			this.secciones = perfil ? await cargarSecciones(perfil) : new Set();
+			this.secciones = perfil ? await cargarSecciones(perfil, this.rol) : new Set();
 		} catch (e) {
 			console.error('Error cargando el perfil:', e);
 			toast.error('No se pudo cargar tu perfil. Probá recargar la página.');
@@ -118,6 +141,16 @@ class Auth {
 		this.session = null;
 		this.perfil = null;
 		this.secciones = new Set();
+	}
+
+	async cambiarVista(vista: Vista) {
+		this.vista = vista;
+		try {
+			localStorage.setItem(CLAVE_VISTA, vista);
+		} catch {
+			// Sin almacenamiento (modo privado): vale hasta recargar.
+		}
+		if (this.perfil) this.secciones = await cargarSecciones(this.perfil, this.rol);
 	}
 
 	// Para pantallas que cambian el curso o el rol del propio usuario.
@@ -172,8 +205,8 @@ async function cargarPerfil(sesion: Session): Promise<Perfil | null> {
 	return perfil;
 }
 
-async function cargarSecciones(perfil: Perfil): Promise<Set<Seccion>> {
-	if (perfil.rol !== 'student') return new Set(['comedor', 'PP', 'recreativo']);
+async function cargarSecciones(perfil: Perfil, rol: Rol): Promise<Set<Seccion>> {
+	if (rol !== 'student') return new Set(['comedor', 'PP', 'recreativo']);
 	// Recreativo está siempre disponible para los alumnos, tengan o no curso asignado.
 	const secciones = new Set<Seccion>(['recreativo']);
 	if (!perfil.curso_id) return secciones;
