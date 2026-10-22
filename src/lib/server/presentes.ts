@@ -9,6 +9,9 @@ import { entradaAula } from '$lib/fechas';
 // almuerzo): si el docente le puso presente o tarde después de esa hora (o del inicio de la clase,
 // si empieza después), esos minutos son su tarde. Se cuenta desde la marca aunque el docente haya
 // tomado lista tarde (lo decidió el colegio).
+// Vale el PRIMER presente que se ve: si el docente vuelve a tomar lista, la intranet cambia la marca
+// de todos a la hora nueva (pasó: 13:06 → 14:15 y a cinco alumnos les quedaron 75 min). Una vez
+// guardado un presente (o tarde) con su hora, esa fichada ya no se vuelve a calcular.
 // Si superan lo que ya se anotó al fichar, se actualiza tardes_procesador (fuente 'presente') y el
 // envío de siempre (/api/cron/tardes) lo manda al procesador, con la hora del presente para que
 // caiga en esa clase. Usa la misma clave que api_tardes (INTRANET_TARDES_TOKEN).
@@ -98,7 +101,9 @@ export async function revisarPresentes(servicio: SupabaseClient<Database>, fecha
 
 	const { data, error } = await servicio
 		.from('registros')
-		.select('id, perfil_id, perfil:perfiles(email, dni, horario_entrada, almuerzo_extra), tarde:tardes_procesador(minutos, estado, fuente)')
+		.select(
+			'id, perfil_id, perfil:perfiles(email, dni, horario_entrada, almuerzo_extra), tarde:tardes_procesador(minutos, estado, fuente), visto:presentes_pp(clase, clase_inicio, estado, marcado, minutos)'
+		)
 		.eq('fecha', fecha);
 	if (error) throw new Error(error.message);
 
@@ -113,6 +118,24 @@ export async function revisarPresentes(servicio: SupabaseClient<Database>, fecha
 		const clases = porDni.get(p.dni!.replace(/\D/g, '')) ?? [];
 		const clase = aula ? claseDeAula(clases, aula) : null;
 		const yaAnotados = r.tarde?.minutos ?? 0;
+
+		// Ya se vio su primer presente: queda ése, aunque el docente haya vuelto a tomar lista.
+		const visto = r.visto;
+		if (visto?.marcado && (visto.estado === 'presente' || visto.estado === 'tarde')) {
+			decisiones.push({
+				registro_id: r.id,
+				email: p.email,
+				hora_aula: aula,
+				clase: visto.clase ? `${visto.clase_inicio?.slice(0, 5) ?? ''} ${visto.clase}` : null,
+				estado: visto.estado,
+				marcado: visto.marcado,
+				minutos: visto.minutos,
+				ya_anotados: yaAnotados,
+				accion: 'nada',
+				motivo: `Ya tenía su primer presente (${horaAR(visto.marcado)})`
+			});
+			continue;
+		}
 
 		let minutos = 0;
 		let motivo = !clase ? 'No hay clase a la hora de aula' : 'Lista sin tomar o ausente';
