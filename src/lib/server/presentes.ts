@@ -45,12 +45,12 @@ export type Decision = {
 // En el horario de la intranet también figuran el almuerzo y los recreos: no son clases.
 const NO_ES_CLASE = /almuerzo|recreo/i;
 
-const aMinutos = (hhmm: string) => {
+export const aMinutos = (hhmm: string) => {
 	const [h, m] = hhmm.split(':').map(Number);
 	return h * 60 + m;
 };
 // Hora argentina ("HH:MM") de un timestamp ISO con offset.
-const horaAR = (iso: string) =>
+export const horaAR = (iso: string) =>
 	new Date(iso).toLocaleTimeString('en-GB', { timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
 // La intranet antepone a veces un <script> de la sesión de padres: el JSON va al final.
@@ -64,7 +64,7 @@ function leerJson(texto: string): RespuestaPresentes | null {
 	}
 }
 
-async function consultar(fecha: string, dnis: string[]) {
+export async function consultar(fecha: string, dnis: string[]) {
 	const porDni = new Map<string, Clase[]>();
 	for (let i = 0; i < dnis.length; i += DNIS_POR_PEDIDO) {
 		const res = await fetch(URL_PRESENTES, {
@@ -82,7 +82,7 @@ async function consultar(fecha: string, dnis: string[]) {
 }
 
 // La clase de la hora de aula: la que está en curso a esa hora o, si cae en un recreo, la siguiente.
-function claseDeAula(clases: Clase[], aula: string) {
+export function claseDeAula(clases: Clase[], aula: string) {
 	const a = aMinutos(aula);
 	return (
 		[...clases]

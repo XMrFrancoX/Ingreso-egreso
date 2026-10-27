@@ -1,6 +1,8 @@
 import { env } from '$env/dynamic/private';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '$lib/types/database.types';
+import { entradaAula } from '$lib/fechas';
+import { aMinutos, claseDeAula, consultar } from '$lib/server/presentes';
 
 // Tardes de pasantías → procesador de asistencias del colegio (API de la intranet, la mantiene
 // otro equipo): POST api_tardes.asp con el DNI, los minutos tarde y la hora en que fichó.
@@ -90,31 +92,105 @@ async function mandar(dni: string, minutos: number, horaFichada: string): Promis
 	return { estado: 'error', respuesta: detalle || `El procesador respondió HTTP ${res.status}.` };
 }
 
-// Manda las tardes pendientes (y las que fallaron por conexión) de los últimos 14 días.
-export async function enviarTardes(servicio: SupabaseClient<Database>) {
+// Hora con la que se manda la tarde: el procesador la anota en la clase que hay a esa hora. Se usa
+// el inicio (+1 min) de la clase de la hora de aula (ingreso, + 30 min si tiene almuerzo): si se
+// manda la hora de la fichada o de la marca del docente, puede caer en un recreo o en la clase
+// siguiente (pasó: lista retomada a las 14:15 en una clase que terminaba 14:10) y queda en cola.
+// Si no se sabe la clase, va la hora de siempre.
+function horaDeEnvio(fecha: string, inicio: string | null | undefined, porDefecto: string) {
+	if (!inicio) return porDefecto;
+	const minutos = aMinutos(inicio) + 1;
+	const hh = String(Math.floor(minutos / 60)).padStart(2, '0');
+	const mm = String(minutos % 60).padStart(2, '0');
+	return `${fecha}T${hh}:${mm}:00-03:00`;
+}
+
+type Fila = {
+	registro_id: string;
+	minutos: number;
+	hora_fichada: string;
+	estado: string;
+	perfil: { dni: string | null; horario_entrada: string | null; almuerzo_extra: boolean } | null;
+	registro: { fecha: string; visto: { clase_inicio: string | null } | null } | null;
+};
+const COLUMNAS =
+	'registro_id, minutos, hora_fichada, estado, perfil:perfiles(dni, horario_entrada, almuerzo_extra), registro:registros(fecha, visto:presentes_pp(clase_inicio))';
+
+// Manda las tardes pendientes (y las que fallaron por conexión) de los últimos 14 días, y vuelve a
+// mandar cada hora, durante 3 días, las que quedaron "en cola": si el procesador ya la aplicó
+// contesta "ya estaba" (Anotada); si estaba esperando la planilla, la aplica ahora.
+// Con `simular` no manda ni guarda nada: dice qué mandaría y con qué hora.
+export async function enviarTardes(servicio: SupabaseClient<Database>, simular = false) {
 	if (!env.INTRANET_TARDES_TOKEN) throw new Error('Falta configurar INTRANET_TARDES_TOKEN');
 
-	const desde = new Date(Date.now() - 14 * 24 * 60 * 60_000).toISOString();
-	const { data, error } = await servicio
-		.from('tardes_procesador')
-		.select('registro_id, minutos, hora_fichada, perfil:perfiles(dni)')
-		.in('estado', ['pendiente', 'error'])
-		.lt('intentos', 10)
-		.gt('hora_fichada', desde)
-		.order('hora_fichada')
-		.limit(POR_TANDA);
-	if (error) throw new Error(error.message);
+	const ahora = Date.now();
+	const [nuevas, enCola] = await Promise.all([
+		servicio
+			.from('tardes_procesador')
+			.select(COLUMNAS)
+			.in('estado', ['pendiente', 'error'])
+			.lt('intentos', 10)
+			.gt('hora_fichada', new Date(ahora - 14 * 24 * 60 * 60_000).toISOString())
+			.order('hora_fichada')
+			.limit(POR_TANDA),
+		servicio
+			.from('tardes_procesador')
+			.select(COLUMNAS)
+			.eq('estado', 'en_cola')
+			.lt('enviado_en', new Date(ahora - 60 * 60_000).toISOString())
+			.gt('hora_fichada', new Date(ahora - 3 * 24 * 60 * 60_000).toISOString())
+			.order('hora_fichada')
+			.limit(POR_TANDA)
+	]);
+	if (nuevas.error) throw new Error(nuevas.error.message);
+	if (enCola.error) throw new Error(enCola.error.message);
+	const filas = [...(nuevas.data ?? []), ...(enCola.data ?? [])].slice(0, POR_TANDA) as unknown as Fila[];
+
+	// La clase de la hora de aula: la guardada por la revisión de presentes o, si todavía no está,
+	// preguntándole a la intranet (una consulta por día para todos los DNI).
+	const faltan = new Map<string, Set<string>>();
+	for (const f of filas) {
+		const dni = (f.perfil?.dni ?? '').replace(/\D/g, '');
+		if (dni && f.registro && !f.registro.visto?.clase_inicio) {
+			faltan.set(f.registro.fecha, (faltan.get(f.registro.fecha) ?? new Set()).add(dni));
+		}
+	}
+	const clasesPorFecha = new Map<string, Awaited<ReturnType<typeof consultar>>>();
+	for (const [fecha, dnis] of faltan) {
+		try {
+			clasesPorFecha.set(fecha, await consultar(fecha, [...dnis]));
+		} catch (e) {
+			console.error('No se pudo consultar la clase en la intranet:', e);
+		}
+	}
+	const envio = (f: Fila) => {
+		if (!f.registro) return f.hora_fichada;
+		let inicio = f.registro.visto?.clase_inicio?.slice(0, 5);
+		const aula = entradaAula(f.perfil?.horario_entrada, f.perfil?.almuerzo_extra);
+		if (!inicio && aula) {
+			const clases = clasesPorFecha.get(f.registro.fecha)?.get((f.perfil?.dni ?? '').replace(/\D/g, '')) ?? [];
+			inicio = claseDeAula(clases, aula)?.inicio;
+		}
+		return horaDeEnvio(f.registro.fecha, inicio, f.hora_fichada);
+	};
+
+	if (simular) {
+		return {
+			simulacion: true,
+			tardes: filas.map((f) => ({ registro_id: f.registro_id, estado: f.estado, minutos: f.minutos, hora_envio: envio(f) }))
+		};
+	}
 
 	const permitidos = dniPermitidos();
 	const resultados: Resultado[] = [];
-	for (let i = 0; i < data.length; i += EN_PARALELO) {
-		const tanda = data.slice(i, i + EN_PARALELO).map(async (t): Promise<Resultado> => {
+	for (let i = 0; i < filas.length; i += EN_PARALELO) {
+		const tanda = filas.slice(i, i + EN_PARALELO).map(async (t): Promise<Resultado> => {
 			const dni = (t.perfil?.dni ?? '').replace(/\D/g, '');
 			if (!dni) return { registro_id: t.registro_id, estado: 'sin_dni', respuesta: 'El alumno no tiene DNI cargado.' };
 			if (permitidos && !permitidos.has(dni)) {
 				return { registro_id: t.registro_id, estado: 'omitido', respuesta: 'Develop: el DNI no está entre los de prueba, no se mandó.' };
 			}
-			return { registro_id: t.registro_id, ...(await mandar(dni, t.minutos, t.hora_fichada)) };
+			return { registro_id: t.registro_id, ...(await mandar(dni, t.minutos, envio(t))) };
 		});
 		resultados.push(...(await Promise.all(tanda)));
 	}
